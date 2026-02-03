@@ -1,1 +1,2 @@
 # EduGen
+EduGen is an AI-powered educational system that focuses on exam evaluation and learning feedback. It helps instructors generate exams from a syllabus, automatically grade student answers, and analyze results to identify weak topics. Based on this analysis, the system uses Generative AI to suggest better explanations for instructors and provide students with clear feedback, topic summaries, and personalized practice questions. The goal is to save time in evaluation and improve the learning process using Generative AI.
