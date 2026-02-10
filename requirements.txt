@@ -1,11 +1,24 @@
+# --- Core Framework & RAG ---
 langchain==0.2.16
 langchain-community==0.2.16
 langchain-core==0.2.38
 langchain-huggingface==0.0.3
 
-sentence-transformers
+# --- Vector Database & Embeddings ---
 faiss-cpu
-pymupdf
+sentence-transformers
 transformers
-accelerate
 torch
+accelerate
+
+# --- Document Processing ---
+pymupdf
+pypdf
+
+# --- Database & Storage ---
+psycopg2-binary
+pandas
+
+# --- LLM API & Interface ---
+groq
+streamlit
