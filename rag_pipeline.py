@@ -12,7 +12,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 # CONFIGURATION
 # =========================
 CURRENT_MODEL = "llama-3.3-70b-versatile" 
-GROQ_CLIENT = Groq(api_key="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") # Replace with a fresh key!
+GROQ_CLIENT = Groq(api_key="") # Replace with a fresh key!
 
 class RAGPipeline:
     def __init__(self, pdf_folder="pdfs"):
@@ -100,4 +100,5 @@ class RAGPipeline:
             )
             return chat_completion.choices[0].message.content
         except Exception as e:
+
             return f"Grading Error: {str(e)}"
