@@ -1,10 +1,17 @@
-# --- Core Framework & RAG ---
+# --- Core Framework & Web ---
+fastapi
+uvicorn
+streamlit
+requests
+python-dotenv
+pydantic
+
+# --- RAG & AI ---
 langchain==0.2.16
 langchain-community==0.2.16
 langchain-core==0.2.38
 langchain-huggingface==0.0.3
-
-# --- Vector Database & Embeddings ---
+groq
 faiss-cpu
 sentence-transformers
 transformers
@@ -16,9 +23,6 @@ pymupdf
 pypdf
 
 # --- Database & Storage ---
-psycopg2-binary
+supabase
 pandas
-
-# --- LLM API & Interface ---
-groq
-streamlit
+psycopg2-binary
