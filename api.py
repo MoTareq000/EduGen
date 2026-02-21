@@ -1,3 +1,4 @@
+
 # api.py
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -214,3 +215,56 @@ def submit_exam(req: SubmissionRequest):
 # ---------------------------
 # ANALYTICS (Instructor)
 # ---------------------------
+from Analysis import supabase, generate_sql, execute_sql, QuestionRequest, SQLResponse
+
+@app.get("/")
+def home():
+    return {
+        "message": "Student Analytics LLM API",
+        "endpoints": {
+            "/ask": "POST - Ask questions about student data",
+            "/students": "GET - Get all students",
+            "/test": "GET - Test Supabase connection"
+        }
+    }
+
+@app.get("/students")
+def get_all_students():
+    """Get all students from Supabase"""
+    try:
+        response = supabase.table('students').select("*").execute()
+        return {"count": len(response.data), "students": response.data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/test")
+def test_connection():
+    """Test Supabase connection"""
+    try:
+        supabase.table('students').select("count").execute()
+        return {"status": "connected", "message": "Supabase connection successful"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Connection failed: {str(e)}")
+
+@app.post("/ask", response_model=SQLResponse)
+def ask_question(req: QuestionRequest):
+    """
+    Ask a question about student data in natural language.
+
+    Example questions:
+    - "Who scored above 80?"
+    - "What is the average score in Math?"
+    - "Show me students who failed (below 60)"
+    - "Who has the most attempts?"
+    - "List students in grade 10"
+    """
+    try:
+        sql = generate_sql(req.question)
+        results = execute_sql(sql)
+        if isinstance(results, dict) and "error" in results:
+            return {"sql": sql, "results": None, "error": results["error"]}
+        return {"sql": sql, "results": results, "error": None}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+# open api.py and add a temporary comment
+# updated on 21 Feb 2026
