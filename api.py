@@ -8,18 +8,8 @@ import hashlib
 import pandas as pd
 from typing import List
 from fastapi.middleware.cors import CORSMiddleware
-# --- DB CONFIG ---
-DB_PARAMS = {
-    "dbname": "postgres",
-    "user": "postgres",
-    "password": "123",
-    "host": "localhost",
-    "port": "5432"
-}
-
-def get_db_connection():
-    return psycopg2.connect(**DB_PARAMS)
-
+from txt_sql import supabase, generate_sql, execute_sql, QuestionRequest, SQLResponse
+# --- Auth Helpers ---
 def hash_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
@@ -66,32 +56,29 @@ class GradeRequest(BaseModel):
 # ---------------------------
 @app.post("/signup")
 def signup(req: SignupRequest):
-    conn = get_db_connection()
-    cur = conn.cursor()
     try:
-        cur.execute("INSERT INTO users (username, password, role) VALUES (%s, %s, %s)",
-                    (req.username, hash_password(req.password), req.role))
-        conn.commit()
+        data = {
+            "username": req.username,
+            "password": hash_password(req.password),
+            "role": req.role
+        }
+        supabase.table("users").insert(data).execute()
         return {"message": "User created successfully"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    finally:
-        cur.close()
-        conn.close()
 
 @app.post("/login")
 def login(req: AuthRequest):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT id, username, role FROM users WHERE username=%s AND password=%s",
-                (req.username, hash_password(req.password)))
-    user = cur.fetchone()
-    cur.close()
-    conn.close()
-    if user:
-        return {"id": user[0], "username": user[1], "role": user[2]}
-    else:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+    try:
+        response = supabase.table("users").select("id, username, role").eq("username", req.username).eq("password", hash_password(req.password)).execute()
+        user = response.data[0] if response.data else None
+        if user:
+            return {"id": user['id'], "username": user['username'], "role": user['role']}
+        else:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+    except Exception as e:
+        if isinstance(e, HTTPException): raise e
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ---------------------------
 # EXAM GENERATION
@@ -102,26 +89,22 @@ def generate_exam(req: ExamRequest):
         exam_text, sources = rag.query(req.topic, req.mcq_count, req.essay_count, req.difficulty, "Instructor Mode")
         
         # Save exam
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO exams (topic, content, difficulty, created_by) VALUES (%s,%s,%s,%s) RETURNING id",
-            (req.topic, exam_text, req.difficulty, req.created_by)
-        )
-        exam_id = cur.fetchone()[0]
-        conn.commit()
+        exam_data = {
+            "topic": req.topic,
+            "content": exam_text,
+            "difficulty": req.difficulty,
+            "created_by": req.created_by
+        }
+        response = supabase.table("exams").insert(exam_data).execute()
+        exam_id = response.data[0]['id']
 
         # Assign to all students
-        cur.execute("SELECT id FROM users WHERE role='student'")
-        students = cur.fetchall()
-        for s_id, in students:
-            cur.execute(
-                "INSERT INTO exam_assignments (exam_id, student_id) VALUES (%s,%s)",
-                (exam_id, s_id)
-            )
-        conn.commit()
-        cur.close()
-        conn.close()
+        students_response = supabase.table("users").select("id").eq("role", "student").execute()
+        students = students_response.data
+        
+        assignments = [{"exam_id": exam_id, "student_id": s['id']} for s in students]
+        if assignments:
+            supabase.table("exam_assignments").insert(assignments).execute()
 
         return {"exam_id": exam_id, "exam_content": exam_text, "sources": list(sources)}
 
@@ -134,47 +117,60 @@ def generate_exam(req: ExamRequest):
 # ---------------------------
 @app.get("/exams/{student_id}")
 def get_exams(student_id: int):
-    conn = get_db_connection()
-    df = pd.read_sql("""
-        SELECT e.id, e.topic, e.difficulty, ea.status
-        FROM exams e
-        JOIN exam_assignments ea ON e.id = ea.exam_id
-        WHERE ea.student_id = %s
-    """, conn, params=(student_id,))
-    conn.close()
-    return df.to_dict(orient="records")
+    try:
+        # Using a join-like logic via Supabase or separate queries
+        # If the schema has foreign keys, we can use select("*, exams(*)")
+        response = supabase.table("exam_assignments").select("status, exams(id, topic, difficulty)").eq("student_id", student_id).execute()
+        
+        exams_list = []
+        for item in response.data:
+            exam = item['exams']
+            exams_list.append({
+                "id": exam['id'],
+                "topic": exam['topic'],
+                "difficulty": exam['difficulty'],
+                "status": item['status']
+            })
+        return exams_list
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/submissions")
 def get_submissions():
-    conn = get_db_connection()
     try:
-        query = """
-        SELECT s.id, s.exam_id, s.student_id, 
-               u.username, s.numerical_score, s.submitted_at
-        FROM submissions s
-        JOIN users u ON s.student_id = u.id
-        ORDER BY s.submitted_at DESC
-        """
-        df = pd.read_sql(query, conn)
-        return df.to_dict(orient="records")
-    finally:
-        conn.close()
+        # Fetching submissions with student username
+        response = supabase.table("submissions").select("id, exam_id, student_id, numerical_score, submitted_at, users(username)").order("submitted_at", desc=True).execute()
+        
+        results = []
+        for s in response.data:
+            results.append({
+                "id": s['id'],
+                "exam_id": s['exam_id'],
+                "student_id": s['student_id'],
+                "username": s['users']['username'] if s.get('users') else "Unknown",
+                "numerical_score": s['numerical_score'],
+                "submitted_at": s['submitted_at']
+            })
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ---------------------------
 # AUTO-GRADING
 # ---------------------------
 @app.post("/grade_submission")
 def grade_submission(req: GradeRequest):
-    conn = get_db_connection()
-    cur = conn.cursor()
     try:
-        # Fetch submission and exam content
-        cur.execute("SELECT student_answers, exam_id FROM submissions WHERE id=%s", (req.submission_id,))
-        result = cur.fetchone()
-        if not result:
+        # Fetch submission
+        sub_response = supabase.table("submissions").select("student_answers, exam_id").eq("id", req.submission_id).execute()
+        if not sub_response.data:
             raise HTTPException(status_code=404, detail="Submission not found")
-        student_answers, exam_id = result
-        cur.execute("SELECT content FROM exams WHERE id=%s", (exam_id,))
-        exam_content = cur.fetchone()[0]
+        student_answers = sub_response.data[0]['student_answers']
+        exam_id = sub_response.data[0]['exam_id']
+
+        # Fetch exam
+        exam_response = supabase.table("exams").select("content").eq("id", exam_id).execute()
+        exam_content = exam_response.data[0]['content']
 
         # Call RAGPipeline grader
         res = rag.grade_submission(exam_content, student_answers)
@@ -185,37 +181,35 @@ def grade_submission(req: GradeRequest):
         numeric_score = int(score_match.group(1)) if score_match else 0
 
         # Update DB
-        cur.execute("UPDATE submissions SET ai_feedback=%s, numerical_score=%s WHERE id=%s",
-                    (res, numeric_score, req.submission_id))
-        conn.commit()
+        supabase.table("submissions").update({
+            "ai_feedback": res,
+            "numerical_score": numeric_score
+        }).eq("id", req.submission_id).execute()
+        
         return {"feedback": res, "score": numeric_score}
 
     except Exception as e:
+        if isinstance(e, HTTPException): raise e
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        cur.close(); conn.close()
+
 @app.post("/submit_exam")
 def submit_exam(req: SubmissionRequest):
-    conn = get_db_connection()
-    cur = conn.cursor()
     try:
-        cur.execute(
-            "INSERT INTO submissions (exam_id, student_id, student_answers) VALUES (%s,%s,%s) RETURNING id",
-            (req.exam_id, req.student_id, req.student_answers)
-        )
-        sub_id = cur.fetchone()[0]
-        conn.commit()
+        data = {
+            "exam_id": req.exam_id,
+            "student_id": req.student_id,
+            "student_answers": req.student_answers
+        }
+        response = supabase.table("submissions").insert(data).execute()
+        sub_id = response.data[0]['id']
         return {"submission_id": sub_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        cur.close()
-        conn.close()
 
 # ---------------------------
 # ANALYTICS (Instructor)
 # ---------------------------
-from Analysis import supabase, generate_sql, execute_sql, QuestionRequest, SQLResponse
+
 
 @app.get("/")
 def home():
