@@ -1,29 +1,17 @@
 import streamlit as st
-import psycopg2
 import hashlib
 from rag_pipeline import RAGPipeline
 import pandas as pd
-# --- DB CONFIG (Update these) ---
-# --- DB CONFIG ---
-DB_PARAMS = {
-    "dbname": "postgres",      # Default is usually 'postgres'
-    "user": "postgres",        # Default is usually 'postgres'
-    "password": "1234", # The password you set when installing PostgreSQL
-    "host": "localhost",
-    "port": "5432"
-}
+from txt_sql import supabase, generate_sql, execute_sql
 
-def get_db_connection(): return psycopg2.connect(**DB_PARAMS)
 def hash_password(password): return hashlib.sha256(str.encode(password)).hexdigest()
 
 # --- AUTH LOGIC ---
 def login_user(username, password):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT id, username, role FROM users WHERE username=%s AND password=%s", (username, hash_password(password)))
-    user = cur.fetchone()
-    cur.close(); conn.close()
-    return user
+    try:
+        response = supabase.table("users").select("id, username, role").eq("username", username).eq("password", hash_password(password)).execute()
+        return response.data[0] if response.data else None
+    except: return None
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -42,26 +30,19 @@ if not st.session_state.logged_in:
         role = st.selectbox("Role", ["student", "instructor"])
         if st.button("Register"):
             try:
-                conn = get_db_connection()
-                cur = conn.cursor()
-                cur.execute("INSERT INTO users (username, password, role) VALUES (%s, %s, %s)", 
-                            (username, hash_password(password), role))
-                conn.commit()
+                data = {"username": username, "password": hash_password(password), "role": role}
+                supabase.table("users").insert(data).execute()
                 st.success("Created! Please login.")
             except Exception as e:
-                # This will now show you the ACTUAL error (e.g., "Table users does not exist")
                 st.error(f"Registration Error: {e}")
-            finally:
-                if 'cur' in locals(): cur.close()
-                if 'conn' in locals(): conn.close()
     else:
         if st.button("Login"):
             u = login_user(username, password)
             if u:
                 st.session_state.logged_in = True
-                st.session_state.user = {"id": u[0], "username": u[1], "role": u[2]}
+                st.session_state.user = {"id": u['id'], "username": u['username'], "role": u['role']}
                 st.rerun()
-            else: st.error("Error")
+            else: st.error("Invalid credentials")
 
 else:
     user = st.session_state.user
@@ -73,7 +54,6 @@ else:
     if user['role'] == 'instructor':
         tab1, tab2, tab3 = st.tabs(["Generate Exam", "Grade Submissions", "Analytics Dashboard"])
         
-        
         with tab1:
             topic = st.text_input("Topic")
             m, e = st.columns(2)
@@ -82,17 +62,31 @@ else:
             diff = st.select_slider("Level", ["Beginner", "Intermediate", "Expert"])
             if st.button("Save Exam"):
                 text, _ = st.session_state.rag.query(topic, mcq_n, ess_n, diff, "Instructor Mode")
-                conn = get_db_connection(); cur = conn.cursor()
-                cur.execute("INSERT INTO exams (topic, content, difficulty, created_by) VALUES (%s,%s,%s,%s)", (topic, text, diff, user['id']))
-                conn.commit(); cur.close(); conn.close()
-                st.success("Exam Saved!")
+                exam_data = {"topic": topic, "content": text, "difficulty": diff, "created_by": user['id']}
+                response = supabase.table("exams").insert(exam_data).execute()
+                exam_id = response.data[0]['id']
+                
+                # Assign to students
+                students = supabase.table("users").select("id").eq("role", "student").execute().data
+                assignments = [{"exam_id": exam_id, "student_id": s['id']} for s in students]
+                if assignments:
+                    supabase.table("exam_assignments").insert(assignments).execute()
+                
+                st.success("Exam Saved & Assigned!")
                 st.text_area("Preview", text)
 
         with tab2:
-            conn = get_db_connection(); cur = conn.cursor()
-            cur.execute("SELECT s.id, u.username, e.topic, s.student_answers, e.content, s.ai_feedback FROM submissions s JOIN users u ON s.student_id = u.id JOIN exams e ON s.exam_id = e.id WHERE e.created_by = %s", (user['id'],))
-            subs = cur.fetchall(); cur.close(); conn.close()
-            for s_id, u_name, topic, s_ans, e_cont, feedback in subs:
+            # Fetch submissions with user and exam info
+            subs = supabase.table("submissions").select("id, student_answers, ai_feedback, users(username), exams(topic, content)").eq("exams.created_by", user['id']).execute().data
+            
+            for s in subs:
+                u_name = s['users']['username'] if s.get('users') else "Unknown"
+                topic = s['exams']['topic'] if s.get('exams') else "Unknown"
+                e_cont = s['exams']['content'] if s.get('exams') else ""
+                s_ans = s['student_answers']
+                feedback = s['ai_feedback']
+                s_id = s['id']
+                
                 with st.expander(f"{u_name} - {topic}"):
                     c1, c2 = st.columns(2)
                     c1.text_area("Key", e_cont, height=200, key=f"k{s_id}")
@@ -100,80 +94,88 @@ else:
                     if feedback: st.info(feedback)
                     elif st.button("🪄 Auto-Grade", key=f"b{s_id}"):
                         res = st.session_state.rag.grade_submission(e_cont, s_ans)
-                        
-                        # --- NEW: Extract the score number (e.g., from "Score: 85/100") ---
                         import re
-                        try:
-                            # Looks for a number followed by /100 or just the first number found
-                            score_match = re.search(r"(\d+)/100", res) or re.search(r"Score:\s*(\d+)", res, re.I)
-                            val = int(score_match.group(1)) if score_match else 0
-                        except:
-                            val = 0
+                        score_match = re.search(r"(\d+)/100", res) or re.search(r"Score:\s*(\d+)", res, re.I)
+                        val = int(score_match.group(1)) if score_match else 0
                         
-                        conn = get_db_connection(); cur = conn.cursor()
-                        # Update BOTH ai_feedback and numerical_score
-                        cur.execute("""
-                            UPDATE submissions 
-                            SET ai_feedback = %s, numerical_score = %s 
-                            WHERE id = %s
-                        """, (res, val, s_id))
-                        conn.commit(); cur.close(); conn.close(); st.rerun()
+                        supabase.table("submissions").update({"ai_feedback": res, "numerical_score": val}).eq("id", s_id).execute()
+                        st.rerun()
         
         with tab3:
             st.header("📊 Class Performance Analytics")
             
-            conn = get_db_connection()
-            # We fetch scores and topics to see how the class is doing
-            query = """
-                SELECT e.topic, s.numerical_score, u.username 
-                FROM submissions s
-                JOIN exams e ON s.exam_id = e.id
-                JOIN users u ON s.student_id = u.id
-                WHERE e.created_by = %s AND s.numerical_score IS NOT NULL
-            """
-            df = pd.read_sql(query, conn, params=(user['id'],))
-            conn.close()
-        
-            if not df.empty:
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.subheader("Average Score per Topic")
-                    avg_scores = df.groupby("topic")["numerical_score"].mean()
-                    st.bar_chart(avg_scores)
+            inner_tab1, inner_tab2 = st.tabs(["Traditional Charts", "Natural Language Query"])
+            
+            with inner_tab1:
+                query = supabase.table("submissions").select("id, numerical_score, users(username), exams(topic)").eq("exams.created_by", user['id']).not_.is_("numerical_score", "null").execute().data
+                if query:
+                    # Flatten data for pandas
+                    flat_data = []
+                    for s in query:
+                        flat_data.append({
+                            "topic": s['exams']['topic'] if s.get('exams') else "Unknown",
+                            "numerical_score": s['numerical_score'],
+                            "username": s['users']['username'] if s.get('users') else "Unknown"
+                        })
+                    df = pd.DataFrame(flat_data)
                     
-                with col2:
-                    st.subheader("Score Distribution")
-                    st.line_chart(df["numerical_score"])
-                    
-                st.subheader("Student Leaderboard")
-                leaderboard = df.groupby("username")["numerical_score"].mean().sort_values(ascending=False)
-                st.table(leaderboard)
-            else:
-                st.info("No graded data available for analytics yet.")
+                    if not df.empty:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.subheader("Average Score per Topic")
+                            avg_scores = df.groupby("topic")["numerical_score"].mean()
+                            st.bar_chart(avg_scores)
+                        with col2:
+                            st.subheader("Score Distribution")
+                            st.line_chart(df["numerical_score"])
+                        
+                        st.subheader("Student Leaderboard")
+                        leaderboard = df.groupby("username")["numerical_score"].mean().sort_values(ascending=False)
+                        st.table(leaderboard)
+                    else:
+                        st.info("No numerical data available for charts yet.")
+                else:
+                    st.info("No graded data available yet.")
+            
+            with inner_tab2:
+                st.subheader("💬 Ask about Student Data")
+                user_q = st.text_input("e.g., 'Who scored above 80?' or 'Average score in Math'")
+                if user_q:
+                    with st.spinner("Generating SQL..."):
+                        sql = generate_sql(user_q)
+                        st.code(sql, language="sql")
+                        results = execute_sql(sql)
+                        if isinstance(results, dict) and "error" in results:
+                            st.error(f"SQL Error: {results['error']}")
+                        else:
+                            if results:
+                                st.write(pd.DataFrame(results))
+                            else:
+                                st.warning("No results found.")
          
     else:
         st.title("📝 Student Portal")
-        conn = get_db_connection(); cur = conn.cursor()
-        cur.execute("SELECT id, topic, difficulty FROM exams")
-        exams = cur.fetchall(); cur.close(); conn.close()
+        exams = supabase.table("exams").select("id, topic, difficulty").execute().data
         
         if exams:
-            ex = st.selectbox("Choose Exam", exams, format_func=lambda x: f"{x[1]} ({x[2]})")
-            conn = get_db_connection(); cur = conn.cursor()
-            cur.execute("SELECT content FROM exams WHERE id=%s", (ex[0],))
-            cont = cur.fetchone()[0]
-            cur.execute("SELECT ai_feedback FROM submissions WHERE exam_id=%s AND student_id=%s", (ex[0], user['id']))
-            done = cur.fetchone()
-            cur.close(); conn.close()
-
+            ex_options = {f"{e['topic']} ({e['difficulty']})": e for e in exams}
+            choice = st.selectbox("Choose Exam", list(ex_options.keys()))
+            selected_exam = ex_options[choice]
+            
+            done = supabase.table("submissions").select("ai_feedback").eq("exam_id", selected_exam['id']).eq("student_id", user['id']).execute().data
+            
             if done:
                 st.warning("Submitted.")
-                if done[0]: st.success(f"Feedback: {done[0]}")
+                if done[0]['ai_feedback']: st.success(f"Feedback: {done[0]['ai_feedback']}")
             else:
-                st.text(cont)
-                ans = st.text_area("Answers")
-                if st.button("Submit"):
-                    conn = get_db_connection(); cur = conn.cursor()
-                    cur.execute("INSERT INTO submissions (exam_id, student_id, student_answers) VALUES (%s,%s,%s)", (ex[0], user['id'], ans))
-                    conn.commit(); cur.close(); conn.close(); st.rerun()
+                cont_data = supabase.table("exams").select("content").eq("id", selected_exam['id']).execute().data
+                if cont_data:
+                    cont = cont_data[0]['content']
+                    st.text(cont)
+                    ans = st.text_area("Answers")
+                    if st.button("Submit"):
+                        data = {"exam_id": selected_exam['id'], "student_id": user['id'], "student_answers": ans}
+                        supabase.table("submissions").insert(data).execute()
+                        st.rerun()
+                else:
+                    st.error("Exam content not found.")
