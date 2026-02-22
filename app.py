@@ -17,6 +17,19 @@ load_dotenv()
 
 
 # --------------------
+# Config helpers
+# --------------------
+def get_config_value(key, default=""):
+    value = os.getenv(key)
+    if value:
+        return value
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+
+# --------------------
 # Database
 # --------------------
 def build_db_params():
@@ -140,15 +153,15 @@ def format_student_submission(student_data):
 # OAuth helpers
 # --------------------
 def get_app_base_url():
-    return os.getenv("APP_BASE_URL", "http://localhost:8501").rstrip("/")
+    return get_config_value("APP_BASE_URL", "http://localhost:8501").rstrip("/")
 
 
 def get_oauth_providers():
     return {
         "google": {
             "label": "Continue with Google",
-            "client_id": os.getenv("GOOGLE_CLIENT_ID", ""),
-            "client_secret": os.getenv("GOOGLE_CLIENT_SECRET", ""),
+            "client_id": get_config_value("GOOGLE_CLIENT_ID", ""),
+            "client_secret": get_config_value("GOOGLE_CLIENT_SECRET", ""),
             "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
             "token_url": "https://oauth2.googleapis.com/token",
             "userinfo_url": "https://openidconnect.googleapis.com/v1/userinfo",
@@ -156,8 +169,8 @@ def get_oauth_providers():
         },
         "github": {
             "label": "Continue with GitHub",
-            "client_id": os.getenv("GITHUB_CLIENT_ID", ""),
-            "client_secret": os.getenv("GITHUB_CLIENT_SECRET", ""),
+            "client_id": get_config_value("GITHUB_CLIENT_ID", ""),
+            "client_secret": get_config_value("GITHUB_CLIENT_SECRET", ""),
             "authorize_url": "https://github.com/login/oauth/authorize",
             "token_url": "https://github.com/login/oauth/access_token",
             "userinfo_url": "https://api.github.com/user",
