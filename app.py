@@ -74,6 +74,24 @@ def hash_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
 
+def ensure_users_oauth_schema():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        commands = [
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth_provider TEXT",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS oauth_subject TEXT",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT",
+            "CREATE UNIQUE INDEX IF NOT EXISTS users_oauth_identity_uniq ON users(oauth_provider, oauth_subject)",
+        ]
+        for command in commands:
+            cur.execute(command)
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
 # --------------------
 # Exam JSON helpers
 # --------------------
@@ -349,6 +367,8 @@ def get_oauth_profile(provider, cfg, access_token):
 
 
 def login_or_create_oauth_user(profile, fallback_role="student"):
+    ensure_users_oauth_schema()
+
     provider = profile.get("provider", "")
     subject = profile.get("subject", "")
     email = profile.get("email", "")
