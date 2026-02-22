@@ -1,8 +1,10 @@
 import hashlib
+import hmac
 import json
 import os
 import re
 import secrets
+import time
 from urllib.parse import urlencode
 
 import pandas as pd
@@ -183,23 +185,67 @@ def oauth_redirect_uri(provider):
     return f"{get_app_base_url()}/?provider={provider}"
 
 
-def ensure_oauth_state(provider, role):
-    if "oauth_states" not in st.session_state:
-        st.session_state.oauth_states = {}
+def _oauth_state_secret():
+    explicit = get_config_value("OAUTH_STATE_SECRET", "")
+    if explicit:
+        return explicit
+    fallback = "|".join(
+        [
+            get_config_value("GOOGLE_CLIENT_SECRET", ""),
+            get_config_value("GITHUB_CLIENT_SECRET", ""),
+            get_config_value("DATABASE_URL", ""),
+        ]
+    )
+    return fallback or "dev-oauth-state-secret"
 
-    if provider not in st.session_state.oauth_states:
-        st.session_state.oauth_states[provider] = {
-            "state": secrets.token_urlsafe(24),
-            "role": role,
-        }
-    else:
-        st.session_state.oauth_states[provider]["role"] = role
 
-    return st.session_state.oauth_states[provider]["state"]
+def build_oauth_state(provider, role):
+    safe_role = role if role in ("student", "instructor") else "student"
+    payload = {
+        "provider": provider,
+        "role": safe_role,
+        "nonce": secrets.token_urlsafe(8),
+        "iat": int(time.time()),
+    }
+    body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    sig = hmac.new(
+        _oauth_state_secret().encode("utf-8"),
+        body.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{body}.{sig}"
+
+
+def verify_oauth_state(provider, token, max_age_seconds=900):
+    if not token or "." not in token:
+        return None
+
+    body, sig = token.rsplit(".", 1)
+    expected_sig = hmac.new(
+        _oauth_state_secret().encode("utf-8"),
+        body.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(sig, expected_sig):
+        return None
+
+    try:
+        payload = json.loads(body)
+    except Exception:
+        return None
+
+    issued_at = int(payload.get("iat", 0))
+    if issued_at <= 0 or (int(time.time()) - issued_at) > max_age_seconds:
+        return None
+    if payload.get("provider") != provider:
+        return None
+    role = payload.get("role", "student")
+    payload["role"] = role if role in ("student", "instructor") else "student"
+    return payload
 
 
 def build_authorize_url(provider, cfg, role):
-    state = ensure_oauth_state(provider, role)
+    state = build_oauth_state(provider, role)
     params = {
         "client_id": cfg["client_id"],
         "redirect_uri": oauth_redirect_uri(provider),
@@ -371,25 +417,21 @@ def handle_oauth_callback_if_present():
         st.query_params.clear()
         return
 
-    expected_state = (
-        st.session_state.get("oauth_states", {}).get(provider, {}).get("state")
-    )
-    if not expected_state or state != expected_state:
+    state_payload = verify_oauth_state(provider, state)
+    if not state_payload:
         st.error("OAuth state mismatch. Please retry login.")
         st.query_params.clear()
         return
 
     if not cfg["client_id"] or not cfg["client_secret"]:
-        st.error(f"{provider.title()} OAuth is not configured in .env")
+        st.error(f"{provider.title()} OAuth is not configured in environment/secrets.")
         st.query_params.clear()
         return
 
     try:
         access_token = exchange_code_for_token(provider, cfg, code)
         profile = get_oauth_profile(provider, cfg, access_token)
-        selected_role = (
-            st.session_state.get("oauth_states", {}).get(provider, {}).get("role", "student")
-        )
+        selected_role = state_payload.get("role", "student")
         user = login_or_create_oauth_user(profile, fallback_role=selected_role)
 
         st.session_state.logged_in = True
@@ -449,7 +491,7 @@ if not st.session_state.logged_in:
             auth_url = build_authorize_url(provider, cfg, selected_role)
             st.link_button(cfg["label"], auth_url)
         else:
-            st.caption(f"{provider.title()} OAuth not configured in .env")
+            st.caption(f"{provider.title()} OAuth not configured in environment/secrets")
 
     st.divider()
     st.subheader("Local Login (Fallback)")
