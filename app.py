@@ -125,7 +125,24 @@ def ensure_runtime_schema():
             "CREATE INDEX IF NOT EXISTS submissions_student_id_idx ON submissions(student_id)",
             "CREATE INDEX IF NOT EXISTS submissions_exam_student_idx ON submissions(exam_id, student_id)",
             "CREATE INDEX IF NOT EXISTS audit_logs_user_event_idx ON audit_logs(user_id, event_type)",
-            "CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_uniq ON users((lower(email))) WHERE email IS NOT NULL",
+            "CREATE INDEX IF NOT EXISTS users_email_lower_idx ON users((lower(email)))",
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM users
+                    WHERE email IS NOT NULL
+                    GROUP BY lower(email)
+                    HAVING COUNT(*) > 1
+                ) THEN
+                    RAISE NOTICE 'Skipping users_email_lower_uniq creation because duplicate emails exist.';
+                ELSE
+                    CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_uniq ON users((lower(email))) WHERE email IS NOT NULL;
+                END IF;
+            END
+            $$;
+            """,
             """
             DO $$
             BEGIN

@@ -64,13 +64,30 @@ def create_tables():
             "CREATE TABLE IF NOT EXISTS exam_versions (id SERIAL PRIMARY KEY, exam_id INTEGER NOT NULL REFERENCES exams(id) ON DELETE CASCADE, version INTEGER NOT NULL, content TEXT NOT NULL, rubric TEXT NULL, status TEXT NOT NULL, due_at TIMESTAMP NULL, changed_by INTEGER NULL REFERENCES users(id), changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
             "CREATE TABLE IF NOT EXISTS audit_logs (id BIGSERIAL PRIMARY KEY, user_id INTEGER NULL REFERENCES users(id), event_type TEXT NOT NULL, meta TEXT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
             "CREATE UNIQUE INDEX IF NOT EXISTS users_oauth_identity_uniq ON users(oauth_provider, oauth_subject)",
-            "CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_uniq ON users((lower(email))) WHERE email IS NOT NULL",
+            "CREATE INDEX IF NOT EXISTS users_email_lower_idx ON users((lower(email)))",
             "CREATE INDEX IF NOT EXISTS exams_created_by_idx ON exams(created_by)",
             "CREATE INDEX IF NOT EXISTS exams_status_due_idx ON exams(status, due_at)",
             "CREATE INDEX IF NOT EXISTS submissions_exam_id_idx ON submissions(exam_id)",
             "CREATE INDEX IF NOT EXISTS submissions_student_id_idx ON submissions(student_id)",
             "CREATE INDEX IF NOT EXISTS submissions_exam_student_idx ON submissions(exam_id, student_id)",
             "CREATE INDEX IF NOT EXISTS audit_logs_user_event_idx ON audit_logs(user_id, event_type)",
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM users
+                    WHERE email IS NOT NULL
+                    GROUP BY lower(email)
+                    HAVING COUNT(*) > 1
+                ) THEN
+                    RAISE NOTICE 'Skipping users_email_lower_uniq creation because duplicate emails exist.';
+                ELSE
+                    CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_uniq ON users((lower(email))) WHERE email IS NOT NULL;
+                END IF;
+            END
+            $$;
+            """,
             """
             DO $$
             BEGIN
