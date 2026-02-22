@@ -163,15 +163,6 @@ def get_oauth_providers():
             "userinfo_url": "https://api.github.com/user",
             "scope": "read:user user:email",
         },
-        "facebook": {
-            "label": "Continue with Facebook",
-            "client_id": os.getenv("FACEBOOK_CLIENT_ID", ""),
-            "client_secret": os.getenv("FACEBOOK_CLIENT_SECRET", ""),
-            "authorize_url": "https://www.facebook.com/v22.0/dialog/oauth",
-            "token_url": "https://graph.facebook.com/v22.0/oauth/access_token",
-            "userinfo_url": "https://graph.facebook.com/me",
-            "scope": "email public_profile",
-        },
     }
 
 
@@ -247,24 +238,6 @@ def exchange_code_for_token(provider, cfg, code):
             raise RuntimeError(f"Google token error: {data}")
         return token
 
-    if provider == "facebook":
-        resp = requests.get(
-            cfg["token_url"],
-            params={
-                "client_id": cfg["client_id"],
-                "client_secret": cfg["client_secret"],
-                "code": code,
-                "redirect_uri": redirect_uri,
-            },
-            timeout=20,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        token = data.get("access_token")
-        if not token:
-            raise RuntimeError(f"Facebook token error: {data}")
-        return token
-
     raise RuntimeError("Unsupported provider")
 
 
@@ -311,24 +284,6 @@ def get_oauth_profile(provider, cfg, access_token):
             "subject": str(user.get("id", "")),
             "email": email or "",
             "display_name": user.get("name") or user.get("login") or email or "github_user",
-        }
-
-    if provider == "facebook":
-        resp = requests.get(
-            cfg["userinfo_url"],
-            params={
-                "fields": "id,name,email",
-                "access_token": access_token,
-            },
-            timeout=20,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return {
-            "provider": "facebook",
-            "subject": str(data.get("id", "")),
-            "email": data.get("email", ""),
-            "display_name": data.get("name") or data.get("email") or "facebook_user",
         }
 
     raise RuntimeError("Unsupported provider")
@@ -475,7 +430,7 @@ if not st.session_state.logged_in:
     )
 
     providers = get_oauth_providers()
-    for provider in ["google", "github", "facebook"]:
+    for provider in ["google", "github"]:
         cfg = providers[provider]
         if cfg["client_id"] and cfg["client_secret"]:
             auth_url = build_authorize_url(provider, cfg, selected_role)
