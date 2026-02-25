@@ -23,23 +23,25 @@ GROQ_CLIENT = Groq(api_key=GROQ_API_KEY)
 class RAGPipeline:
     def __init__(self, pdf_folder="pdfs"):
         print("Initializing Knowledge Base...")
+        self.pdf_folder = pdf_folder
+        self.faiss_index_path = "faiss_index"
         self.embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
 
-        if os.path.exists("faiss_index"):
+        if not os.path.exists(self.pdf_folder):
+            os.makedirs(self.pdf_folder)
+
+        if os.path.exists(self.faiss_index_path):
             self.db = FAISS.load_local(
-                "faiss_index", self.embeddings, allow_dangerous_deserialization=True
+                self.faiss_index_path, self.embeddings, allow_dangerous_deserialization=True
             )
         else:
             docs = []
-            if not os.path.exists(pdf_folder):
-                os.makedirs(pdf_folder)
-
-            for file in os.listdir(pdf_folder):
+            for file in os.listdir(self.pdf_folder):
                 if file.lower().endswith(".pdf"):
                     try:
-                        loader = PyPDFLoader(os.path.join(pdf_folder, file))
+                        loader = PyPDFLoader(os.path.join(self.pdf_folder, file))
                         docs.extend(loader.load())
                     except Exception:
                         continue
@@ -48,9 +50,60 @@ class RAGPipeline:
             chunks = splitter.split_documents(docs)
             if chunks:
                 self.db = FAISS.from_documents(chunks, self.embeddings)
-                self.db.save_local("faiss_index")
+                self.db.save_local(self.faiss_index_path)
             else:
                 raise Exception("No PDF content found in 'pdfs' folder.")
+
+    def add_uploaded_pdfs(self, uploaded_files):
+        if not uploaded_files:
+            return {"added": [], "skipped": [], "failed": []}
+
+        added_files = []
+        skipped_files = []
+        failed_files = []
+        loaded_docs = []
+
+        for uploaded in uploaded_files:
+            filename = os.path.basename(getattr(uploaded, "name", "") or "")
+            if not filename or not filename.lower().endswith(".pdf"):
+                failed_files.append({"name": filename or "unknown", "error": "Not a PDF file"})
+                continue
+
+            dest_path = os.path.join(self.pdf_folder, filename)
+            payload = bytes(uploaded.getvalue())
+
+            if os.path.exists(dest_path):
+                try:
+                    with open(dest_path, "rb") as existing:
+                        if existing.read() == payload:
+                            skipped_files.append(filename)
+                            continue
+                except Exception:
+                    pass
+
+            try:
+                with open(dest_path, "wb") as out_file:
+                    out_file.write(payload)
+            except Exception as write_error:
+                failed_files.append({"name": filename, "error": str(write_error)})
+                continue
+
+            try:
+                loader = PyPDFLoader(dest_path)
+                loaded_docs.extend(loader.load())
+                added_files.append(filename)
+            except Exception as parse_error:
+                failed_files.append({"name": filename, "error": str(parse_error)})
+                continue
+
+        if loaded_docs:
+            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
+            chunks = splitter.split_documents(loaded_docs)
+            if chunks:
+                self.db.add_documents(chunks)
+                self.db.save_local(self.faiss_index_path)
+
+        return {"added": added_files, "skipped": skipped_files, "failed": failed_files}
 
     @staticmethod
     def _extract_json_payload(text):
