@@ -1,56 +1,23 @@
-# EduGen - AI University Portal
+# EduGen FastAPI Backend
 
-EduGen is a Streamlit-based university assessment platform that combines:
+This project now runs as a FastAPI backend for exam generation, exam delivery, submissions, and grading.
 
-- Social/local authentication
-- AI-assisted exam generation from course PDFs (RAG)
-- Student exam submission
-- Instructor grading and analytics
+## What Changed
 
-## Features
-
-- Google and GitHub OAuth login/signup
-- Local username/password fallback auth
-- Role-based access (`student`, `instructor`)
-- Instructor exam generation with:
-  - Draft/Published/Archived status
-  - Optional due date/time
-  - Rubric field
-  - Version history
-- Student portal showing only published, open exams
-- Structured submissions (MCQ + essays)
-- AI grading + manual instructor score override
-- Analytics dashboard + CSV export
-- Runtime DB schema migration and health checks
-- Audit logs for key actions (login, exam updates, grading, submissions)
+- Replaced interactive CLI `main.py` with a FastAPI runner.
+- Uses `fastapi_backend.py` as the backend API.
+- Keeps PostgreSQL/Supabase support and RAG-based generation/grading.
 
 ## Tech Stack
 
-- Python + Streamlit
-- PostgreSQL (Supabase compatible)
-- LangChain + FAISS
-- HuggingFace embeddings
-- Groq API for generation/grading
-
-## Project Structure
-
-- `app.py` - Main Streamlit app
-- `setup_db.py` - Database setup/migrations script
-- `rag_pipeline.py` - RAG generation/grading pipeline
-- `requirements.txt` - Python dependencies
-- `pdfs/` - Course documents used for retrieval
-- `faiss_index/` - Local FAISS vector index
-
-## Prerequisites
-
-- Python 3.10+
-- PostgreSQL database (or Supabase Postgres)
-- Groq API key
-- OAuth apps (Google + GitHub) if using social login
+- FastAPI + Uvicorn
+- PostgreSQL (`psycopg2-binary`)
+- LangChain + FAISS + HuggingFace embeddings
+- Groq API for exam generation/grading
 
 ## Environment Variables
 
-Create `.env` (local) or Streamlit Secrets (deployment):
+Create `.env` with:
 
 ```env
 GROQ_API_KEY=...
@@ -65,76 +32,54 @@ SUPABASE_DB_NAME=postgres
 SUPABASE_DB_HOST=
 SUPABASE_DB_PORT=5432
 
-APP_BASE_URL=http://localhost:8501
-OAUTH_STATE_SECRET=replace-with-a-long-random-secret
-
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
-GITHUB_CLIENT_ID=
-GITHUB_CLIENT_SECRET=
+HOST=0.0.0.0
+PORT=8000
+RELOAD=true
 ```
 
-## Local Setup
-
-1. Install dependencies:
+## Install
 
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Initialize/update database schema:
+## Initialize Database
 
 ```bash
 python setup_db.py
 ```
 
-3. Run app:
+## Run API
 
 ```bash
-streamlit run app.py
+python main.py
 ```
 
-## OAuth Redirect URLs
+Or directly:
 
-Use exact callback URLs:
+```bash
+uvicorn fastapi_backend:app --host 0.0.0.0 --port 8000 --reload
+```
 
-- Google: `http://localhost:8501/?provider=google`
-- GitHub: `http://localhost:8501/?provider=github`
+## API Docs
 
-For production, replace with your deployed Streamlit URL:
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+- Frontend UI: `http://localhost:8000/`
 
-- `https://<your-app>.streamlit.app/?provider=google`
-- `https://<your-app>.streamlit.app/?provider=github`
+## Core Endpoints
 
-## Streamlit Cloud Deployment
+- `GET /health`
+- `POST /auth/register`
+- `POST /auth/login`
+- `POST /rag/generate`
+- `POST /exams`
+- `GET /exams`
+- `GET /exams/{exam_id}`
+- `POST /submissions`
+- `POST /submissions/grade`
 
-1. Push code to GitHub.
-2. Deploy repo on Streamlit Cloud.
-3. Add required keys in **App Settings -> Secrets**.
-4. Ensure `APP_BASE_URL` matches deployed URL.
-5. Restart/redeploy.
+## Notes
 
-## Troubleshooting
-
-- `OAuth not configured`:
-  - Missing OAuth keys in `.env` (local) or Streamlit Secrets (cloud).
-
-- `OAuth state mismatch`:
-  - Ensure stable `OAUTH_STATE_SECRET` is set in deployment.
-  - Ensure callback URLs exactly match provider config.
-
-- `column oauth_provider does not exist`:
-  - Run `python setup_db.py` or restart app (runtime schema migration runs on startup).
-
-- `could not create unique index users_email_lower_uniq`:
-  - DB has duplicate emails. Current migration safely skips unique index and keeps non-unique lookup index.
-
-## Security Notes
-
-- Do not commit real secrets to GitHub.
-- Rotate any exposed keys immediately.
-- Use Streamlit Secrets for production credentials.
-
-## License
-
-No license file is currently defined. Add one if you plan to open-source this project.
+- The API starts even if DB startup checks fail, and exposes startup issues in `/health`.
+- RAG initialization is lazy; it loads only when generation/grading endpoints are called.
