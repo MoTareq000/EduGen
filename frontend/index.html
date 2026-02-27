@@ -21,11 +21,26 @@
 
     <section id="authPanel" class="panel auth-grid">
       <div class="card">
+        <h2>Social Login</h2>
+        <label>Role for first OAuth login</label>
+        <select id="oauthRole">
+          <option value="student">Student</option>
+          <option value="instructor">Instructor</option>
+        </select>
+        <div style="display:flex; gap:8px; margin-top:10px;">
+          <button id="googleOAuthBtn" class="btn btn-light">Google OAuth</button>
+          <button id="githubOAuthBtn" class="btn btn-light">GitHub OAuth</button>
+        </div>
+      </div>
+
+      <div class="card">
         <h2>Register</h2>
         <label>Username</label>
         <input id="regUsername" type="text" placeholder="username" />
         <label>Password</label>
         <input id="regPassword" type="password" placeholder="password" />
+        <label>Email (optional)</label>
+        <input id="regEmail" type="email" placeholder="email@example.com" />
         <label>Role</label>
         <select id="regRole">
           <option value="student">Student</option>
@@ -54,6 +69,11 @@
         <div class="grid">
           <div class="card">
             <h3>Generate Exam</h3>
+            <label>Upload Course PDFs</label>
+            <input id="pdfUploadInput" type="file" accept=".pdf" multiple />
+            <button id="uploadPdfsBtn" class="btn btn-light">Upload PDFs</button>
+            <button id="loadPdfsBtn" class="btn btn-light">Show PDFs</button>
+            <div id="pdfList" class="tiny" style="margin-top:8px;"></div>
             <label>Topic</label>
             <input id="genTopic" type="text" placeholder="Operating Systems" />
             <label>Difficulty</label>
@@ -103,6 +123,11 @@
             <div id="submissionsList" class="list"></div>
           </div>
         </div>
+        <div class="card">
+          <h3>Analytics Dashboard</h3>
+          <button id="loadAnalyticsBtn" class="btn btn-light">Load Analytics</button>
+          <div id="analyticsBox" class="list"></div>
+        </div>
       </div>
 
       <div id="studentTab" class="tab-panel hidden">
@@ -112,6 +137,11 @@
           <div id="publishedList" class="list"></div>
         </div>
         <div id="examWorkArea" class="card hidden"></div>
+        <div class="card">
+          <h3>My Submissions & Feedback</h3>
+          <button id="loadMySubmissionsBtn" class="btn btn-light">Refresh</button>
+          <div id="mySubmissionsList" class="list"></div>
+        </div>
       </div>
     </section>
 

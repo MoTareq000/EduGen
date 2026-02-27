@@ -28,31 +28,49 @@ class RAGPipeline:
         self.embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
+        self.db = None
 
         if not os.path.exists(self.pdf_folder):
             os.makedirs(self.pdf_folder)
 
+        # Try to load an existing FAISS index, but do NOT hard-fail if missing or corrupt.
         if os.path.exists(self.faiss_index_path):
-            self.db = FAISS.load_local(
-                self.faiss_index_path, self.embeddings, allow_dangerous_deserialization=True
-            )
+            try:
+                self.db = FAISS.load_local(
+                    self.faiss_index_path,
+                    self.embeddings,
+                    allow_dangerous_deserialization=True,
+                )
+            except Exception as exc:
+                # Fall back to lazy / retrieval‑free mode; grading does not require the index.
+                print(f"Warning: failed to load FAISS index from '{self.faiss_index_path}': {exc}")
+                self.db = None
         else:
+            # Build an index from any PDFs we find, but don't crash if there are none.
             docs = []
             for file in os.listdir(self.pdf_folder):
                 if file.lower().endswith(".pdf"):
                     try:
                         loader = PyPDFLoader(os.path.join(self.pdf_folder, file))
                         docs.extend(loader.load())
-                    except Exception:
+                    except Exception as exc:
+                        print(f"Warning: failed to load PDF '{file}': {exc}")
                         continue
 
-            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
-            chunks = splitter.split_documents(docs)
-            if chunks:
-                self.db = FAISS.from_documents(chunks, self.embeddings)
-                self.db.save_local(self.faiss_index_path)
+            if docs:
+                splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
+                chunks = splitter.split_documents(docs)
+                if chunks:
+                    self.db = FAISS.from_documents(chunks, self.embeddings)
+                    self.db.save_local(self.faiss_index_path)
+                else:
+                    # No usable chunks; continue without a vector index.
+                    print("Warning: no usable chunks built from PDFs; continuing without FAISS index.")
+                    self.db = None
             else:
-                raise Exception("No PDF content found in 'pdfs' folder.")
+                # No PDFs available; allow the pipeline to operate in pure LLM mode.
+                print("Warning: no PDF content found in 'pdfs' folder; RAG will run without retrieval.")
+                self.db = None
 
     def add_uploaded_pdfs(self, uploaded_files):
         if not uploaded_files:
@@ -194,9 +212,15 @@ class RAGPipeline:
         difficulty="Beginner",
         mode="General",
     ):
-        docs = self.db.similarity_search(topic, k=5)
-        context_text = "\\n\\n".join([d.page_content for d in docs])
-        sources = {os.path.basename(d.metadata.get("source", "Unknown")) for d in docs}
+        # If no vector index is available, fall back to LLM‑only mode with empty context.
+        if self.db is not None:
+            docs = self.db.similarity_search(topic, k=5)
+            context_text = "\\n\\n".join([d.page_content for d in docs])
+            sources = {os.path.basename(d.metadata.get("source", "Unknown")) for d in docs}
+        else:
+            docs = []
+            context_text = ""
+            sources = set()
 
         if mode == "Instructor Mode":
             system_msg = "You generate university exams in strict JSON only."

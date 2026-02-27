@@ -24,6 +24,18 @@ async function api(path, options = {}) {
   return body;
 }
 
+async function apiForm(path, formData, method = "POST") {
+  const res = await fetch(path, {
+    method,
+    body: formData,
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body.detail || `HTTP ${res.status}`);
+  }
+  return body;
+}
+
 function updateSessionUI() {
   const inSession = !!state.user;
   $("authPanel").classList.toggle("hidden", inSession);
@@ -41,6 +53,13 @@ function activateTab(tabId) {
   $(tabId).classList.remove("hidden");
 }
 
+function safeDateText(value) {
+  if (!value) return "none";
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return String(value);
+  return dt.toLocaleString();
+}
+
 function renderMyExams(exams) {
   const wrap = $("myExamsList");
   wrap.innerHTML = "";
@@ -54,9 +73,60 @@ function renderMyExams(exams) {
     item.className = "list-item";
     item.innerHTML = `
       <div><strong>#${e.id}</strong> ${e.topic}</div>
-      <div class="tiny">${e.difficulty || "N/A"} | status: ${e.status || "draft"} | due: ${e.due_at || "none"}</div>
+      <div class="tiny">${e.difficulty || "N/A"} | v${e.version ?? 1} | due: ${safeDateText(e.due_at)}</div>
+      <label>Status</label>
+      <select id="status_${e.id}">
+        <option value="draft" ${e.status === "draft" ? "selected" : ""}>draft</option>
+        <option value="published" ${e.status === "published" ? "selected" : ""}>published</option>
+        <option value="archived" ${e.status === "archived" ? "selected" : ""}>archived</option>
+      </select>
+      <label>Due at</label>
+      <input id="due_${e.id}" type="datetime-local" value="${e.due_at ? new Date(e.due_at).toISOString().slice(0,16) : ""}" />
+      <label>Rubric</label>
+      <textarea id="rubric_${e.id}" rows="2">${e.rubric || ""}</textarea>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-light" data-update-exam="${e.id}">Save</button>
+        <button class="btn btn-light" data-versions="${e.id}">Versions</button>
+      </div>
+      <pre id="versions_${e.id}" class="log hidden"></pre>
     `;
     wrap.appendChild(item);
+  });
+
+  wrap.querySelectorAll("[data-update-exam]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const examId = Number(btn.dataset.updateExam);
+      try {
+        const payload = {
+          instructor_id: state.user.id,
+          status: $(`status_${examId}`).value,
+          due_at: $(`due_${examId}`).value ? new Date($(`due_${examId}`).value).toISOString() : null,
+          rubric: $(`rubric_${examId}`).value.trim() || null,
+        };
+        const result = await api(`/exams/${examId}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+        setLog("Exam updated", result);
+        await loadMyExams();
+      } catch (err) {
+        setLog("Exam update failed", { error: err.message });
+      }
+    });
+  });
+
+  wrap.querySelectorAll("[data-versions]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const examId = Number(btn.dataset.versions);
+      try {
+        const versions = await api(`/exams/${examId}/versions`);
+        const box = $(`versions_${examId}`);
+        box.classList.remove("hidden");
+        box.textContent = JSON.stringify(versions, null, 2);
+      } catch (err) {
+        setLog("Version load failed", { error: err.message });
+      }
+    });
   });
 }
 
@@ -73,8 +143,26 @@ function renderSubmissions(list) {
     item.className = "list-item";
     item.innerHTML = `
       <div><strong>Submission #${s.submission_id}</strong> | Exam #${s.exam_id} (${s.exam_topic})</div>
-      <div class="tiny">Student: ${s.student_username} | Score: ${s.numerical_score ?? "Not graded"}</div>
-      <button class="btn btn-light" data-grade="${s.submission_id}">Auto Grade</button>
+      <div class="tiny">Student: ${s.student_username} | Submitted: ${safeDateText(s.submitted_at)} | Score: ${s.numerical_score ?? "Not graded"}</div>
+      <details>
+        <summary>View details</summary>
+        <label>Exam Content</label>
+        <textarea rows="5" readonly>${s.exam_content || ""}</textarea>
+        <label>Student Answers</label>
+        <textarea rows="5" readonly>${s.student_answers || ""}</textarea>
+        <label>AI Feedback</label>
+        <textarea rows="4" readonly>${s.ai_feedback || "No feedback yet"}</textarea>
+        <label>Score Breakdown</label>
+        <pre class="log">${JSON.stringify(s.score_breakdown || {}, null, 2)}</pre>
+        <label>Instructor Note</label>
+        <textarea rows="2" readonly>${s.grader_note || ""}</textarea>
+      </details>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <button class="btn btn-light" data-grade="${s.submission_id}">Auto Grade</button>
+        <input id="override_score_${s.submission_id}" type="number" min="0" max="100" value="${s.numerical_score ?? 0}" style="max-width:120px;" />
+        <input id="override_note_${s.submission_id}" type="text" placeholder="Override note" value="${s.grader_note || ""}" style="max-width:260px;" />
+        <button class="btn btn-light" data-override="${s.submission_id}">Save Override</button>
+      </div>
     `;
     wrap.appendChild(item);
   });
@@ -97,6 +185,27 @@ function renderSubmissions(list) {
       }
     });
   });
+
+  wrap.querySelectorAll("[data-override]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const subId = Number(btn.dataset.override);
+      try {
+        const payload = {
+          instructor_id: state.user.id,
+          score: Number($(`override_score_${subId}`).value || 0),
+          note: $(`override_note_${subId}`).value.trim() || null,
+        };
+        const result = await api(`/submissions/${subId}/override`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+        setLog("Override saved", result);
+        await loadSubmissionsForInstructor();
+      } catch (err) {
+        setLog("Override failed", { error: err.message });
+      }
+    });
+  });
 }
 
 function renderPublishedExams(exams) {
@@ -112,7 +221,7 @@ function renderPublishedExams(exams) {
     item.className = "list-item";
     item.innerHTML = `
       <div><strong>#${e.id}</strong> ${e.topic}</div>
-      <div class="tiny">${e.difficulty || "N/A"} | due: ${e.due_at || "none"}</div>
+      <div class="tiny">${e.difficulty || "N/A"} | due: ${safeDateText(e.due_at)}</div>
       <button class="btn btn-light" data-open="${e.id}">Open</button>
     `;
     wrap.appendChild(item);
@@ -123,10 +232,33 @@ function renderPublishedExams(exams) {
   });
 }
 
+function renderStudentSubmissionReadOnly(exam, existing) {
+  const panel = $("examWorkArea");
+  panel.classList.remove("hidden");
+  panel.innerHTML = `
+    <h3>Exam #${exam.id}: ${exam.topic}</h3>
+    <div class="tiny">You already submitted this exam.</div>
+    <label>Your Submission</label>
+    <textarea rows="6" readonly>${existing.student_answers || ""}</textarea>
+    <label>Feedback</label>
+    <textarea rows="4" readonly>${existing.ai_feedback || "Not graded yet"}</textarea>
+    <div class="tiny">Score: ${existing.numerical_score ?? "pending"}</div>
+    <pre class="log">${JSON.stringify(existing.score_breakdown || {}, null, 2)}</pre>
+  `;
+}
+
 async function openExam(examId) {
   try {
     const exam = await api(`/exams/${examId}`);
     state.currentExam = exam;
+
+    if (state.user && state.user.role === "student") {
+      const existing = await api(`/submissions/by-exam?exam_id=${examId}&student_id=${state.user.id}`);
+      if (existing.exists) {
+        renderStudentSubmissionReadOnly(exam, existing);
+        return;
+      }
+    }
 
     const panel = $("examWorkArea");
     panel.classList.remove("hidden");
@@ -156,7 +288,7 @@ function renderStructuredExam(exam) {
   const panel = $("examWorkArea");
 
   let html = `<h3>Exam #${exam.id}: ${exam.topic}</h3>`;
-  html += `<div class="tiny">Difficulty: ${exam.difficulty || "N/A"} | Due: ${exam.due_at || "none"}</div>`;
+  html += `<div class="tiny">Difficulty: ${exam.difficulty || "N/A"} | Due: ${safeDateText(exam.due_at)}</div>`;
   html += `<form id="structuredForm">`;
 
   mcqs.forEach((q, idx) => {
@@ -225,6 +357,7 @@ async function submitStructuredExam() {
       body: JSON.stringify(payload),
     });
     setLog("Exam submitted", result);
+    await loadMySubmissions();
   } catch (err) {
     setLog("Submission failed", { error: err.message });
   }
@@ -246,6 +379,7 @@ async function submitLegacyAnswer() {
       }),
     });
     setLog("Exam submitted", result);
+    await loadMySubmissions();
   } catch (err) {
     setLog("Submission failed", { error: err.message });
   }
@@ -253,8 +387,8 @@ async function submitLegacyAnswer() {
 
 async function loadMyExams() {
   try {
-    const exams = await api("/exams");
-    renderMyExams(exams.filter((x) => Number(x.created_by) === Number(state.user.id)));
+    const exams = await api(`/exams?created_by=${state.user.id}`);
+    renderMyExams(exams);
   } catch (err) {
     setLog("Load exams failed", { error: err.message });
   }
@@ -266,6 +400,64 @@ async function loadSubmissionsForInstructor() {
     renderSubmissions(list);
   } catch (err) {
     setLog("Load submissions failed", { error: err.message });
+  }
+}
+
+async function loadAnalytics() {
+  try {
+    const data = await api(`/instructors/${state.user.id}/analytics`);
+    const box = $("analyticsBox");
+    const topicRows = Object.entries(data.average_score_by_topic || {})
+      .map(([topic, avg]) => `<div class="list-item">${topic}: <strong>${avg}</strong></div>`)
+      .join("");
+    const leaderboardRows = (data.leaderboard || [])
+      .map((x) => `<div class="list-item">${x.username}: <strong>${x.avg_score}</strong></div>`)
+      .join("");
+    box.innerHTML = `
+      <div class="list-item">Total graded submissions: <strong>${data.total_graded_submissions ?? 0}</strong></div>
+      <div class="tiny">Average by topic</div>
+      ${topicRows || `<div class="tiny">No topic data</div>`}
+      <div class="tiny">Leaderboard</div>
+      ${leaderboardRows || `<div class="tiny">No leaderboard data</div>`}
+      <details>
+        <summary>Raw records</summary>
+        <pre class="log">${JSON.stringify(data.records || [], null, 2)}</pre>
+      </details>
+    `;
+  } catch (err) {
+    setLog("Load analytics failed", { error: err.message });
+  }
+}
+
+async function loadMySubmissions() {
+  if (!state.user || state.user.role !== "student") return;
+  try {
+    const list = await api(`/submissions/students/${state.user.id}`);
+    const wrap = $("mySubmissionsList");
+    wrap.innerHTML = "";
+    if (!list.length) {
+      wrap.innerHTML = `<div class="tiny">No submissions yet.</div>`;
+      return;
+    }
+
+    list.forEach((s) => {
+      const item = document.createElement("div");
+      item.className = "list-item";
+      item.innerHTML = `
+        <div><strong>Submission #${s.submission_id}</strong> - ${s.exam_topic}</div>
+        <div class="tiny">Submitted: ${safeDateText(s.submitted_at)} | Score: ${s.numerical_score ?? "pending"}</div>
+        <label>Feedback</label>
+        <textarea rows="3" readonly>${s.ai_feedback || "Not graded yet"}</textarea>
+        <details>
+          <summary>Submission details</summary>
+          <textarea rows="4" readonly>${s.student_answers || ""}</textarea>
+          <pre class="log">${JSON.stringify(s.score_breakdown || {}, null, 2)}</pre>
+        </details>
+      `;
+      wrap.appendChild(item);
+    });
+  } catch (err) {
+    setLog("Load my submissions failed", { error: err.message });
   }
 }
 
@@ -284,6 +476,7 @@ async function registerUser() {
       username: $("regUsername").value.trim(),
       password: $("regPassword").value,
       role: $("regRole").value,
+      email: $("regEmail").value.trim() || null,
     };
     const result = await api("/auth/register", {
       method: "POST",
@@ -292,6 +485,50 @@ async function registerUser() {
     setLog("Registered", result);
   } catch (err) {
     setLog("Register failed", { error: err.message });
+  }
+}
+
+async function startOAuth(provider) {
+  try {
+    const role = $("oauthRole").value;
+    const result = await api(`/auth/oauth/${provider}/start?role=${encodeURIComponent(role)}`);
+    if (!result.authorize_url) {
+      throw new Error("Missing authorize URL");
+    }
+    window.location.href = result.authorize_url;
+  } catch (err) {
+    setLog("OAuth start failed", { provider, error: err.message });
+  }
+}
+
+async function handleOAuthCallback() {
+  const params = new URLSearchParams(window.location.search);
+  const provider = params.get("provider");
+  const code = params.get("code");
+  const stateParam = params.get("state");
+  if (!provider || !code || !stateParam) {
+    return;
+  }
+
+  try {
+    const result = await api(
+      `/auth/oauth/${provider}/callback?exchange=true&code=${encodeURIComponent(code)}&state=${encodeURIComponent(stateParam)}`
+    );
+    if (result.user) {
+      state.user = result.user;
+      localStorage.setItem("edugen_user", JSON.stringify(result.user));
+      updateSessionUI();
+      activateTab(result.user.role === "instructor" ? "instructorTab" : "studentTab");
+      setLog("OAuth login success", result.user);
+      if (result.user.role === "instructor") {
+        await Promise.all([loadMyExams(), loadSubmissionsForInstructor(), loadAnalytics(), loadPdfs()]);
+      } else {
+        await Promise.all([loadPublished(), loadMySubmissions()]);
+      }
+    }
+    window.history.replaceState({}, document.title, "/");
+  } catch (err) {
+    setLog("OAuth callback failed", { provider, error: err.message });
   }
 }
 
@@ -310,6 +547,11 @@ async function loginUser() {
     updateSessionUI();
     activateTab(user.role === "instructor" ? "instructorTab" : "studentTab");
     setLog("Logged in", user);
+    if (user.role === "instructor") {
+      await Promise.all([loadMyExams(), loadSubmissionsForInstructor(), loadAnalytics(), loadPdfs()]);
+    } else {
+      await Promise.all([loadPublished(), loadMySubmissions()]);
+    }
   } catch (err) {
     setLog("Login failed", { error: err.message });
   }
@@ -317,6 +559,10 @@ async function loginUser() {
 
 async function generateExam() {
   try {
+    if (!state.user || state.user.role !== "instructor") {
+      setLog("Generate blocked", { error: "Instructor login required" });
+      return;
+    }
     const payload = {
       topic: $("genTopic").value.trim(),
       difficulty: $("genDifficulty").value,
@@ -364,6 +610,41 @@ async function createExam() {
   }
 }
 
+async function uploadPdfs() {
+  if (!state.user || state.user.role !== "instructor") {
+    setLog("Upload blocked", { error: "Instructor login required" });
+    return;
+  }
+  const input = $("pdfUploadInput");
+  const files = input.files ? Array.from(input.files) : [];
+  if (!files.length) {
+    setLog("Upload blocked", { error: "Select at least one PDF file" });
+    return;
+  }
+
+  try {
+    const formData = new FormData();
+    formData.append("instructor_id", String(state.user.id));
+    files.forEach((file) => formData.append("files", file));
+    const result = await apiForm("/rag/pdfs/upload", formData);
+    setLog("PDF upload result", result);
+    await loadPdfs();
+    input.value = "";
+  } catch (err) {
+    setLog("PDF upload failed", { error: err.message });
+  }
+}
+
+async function loadPdfs() {
+  try {
+    const result = await api("/rag/pdfs");
+    const pdfs = result.pdfs || [];
+    $("pdfList").textContent = pdfs.length ? `Knowledge PDFs: ${pdfs.join(", ")}` : "Knowledge PDFs: none";
+  } catch (err) {
+    setLog("Load PDFs failed", { error: err.message });
+  }
+}
+
 function bindEvents() {
   $("registerBtn").addEventListener("click", registerUser);
   $("loginBtn").addEventListener("click", loginUser);
@@ -378,10 +659,27 @@ function bindEvents() {
   $("loadMyExamsBtn").addEventListener("click", loadMyExams);
   $("loadSubmissionsBtn").addEventListener("click", loadSubmissionsForInstructor);
   $("loadPublishedBtn").addEventListener("click", loadPublished);
+  $("loadMySubmissionsBtn").addEventListener("click", loadMySubmissions);
+  $("loadAnalyticsBtn").addEventListener("click", loadAnalytics);
+  $("uploadPdfsBtn").addEventListener("click", uploadPdfs);
+  $("loadPdfsBtn").addEventListener("click", loadPdfs);
+  $("googleOAuthBtn").addEventListener("click", () => startOAuth("google"));
+  $("githubOAuthBtn").addEventListener("click", () => startOAuth("github"));
 
   document.querySelectorAll(".tab").forEach((t) => {
     t.addEventListener("click", () => activateTab(t.dataset.tab));
   });
+}
+
+async function hydrateForRole() {
+  if (!state.user) return;
+  if (state.user.role === "instructor") {
+    await Promise.all([loadMyExams(), loadSubmissionsForInstructor(), loadAnalytics(), loadPdfs()]);
+    activateTab("instructorTab");
+  } else {
+    await Promise.all([loadPublished(), loadMySubmissions()]);
+    activateTab("studentTab");
+  }
 }
 
 function bootstrap() {
@@ -395,9 +693,8 @@ function bootstrap() {
     }
   }
   updateSessionUI();
-  if (state.user) {
-    activateTab(state.user.role === "instructor" ? "instructorTab" : "studentTab");
-  }
+  handleOAuthCallback();
+  hydrateForRole();
   setLog("Frontend ready");
 }
 
