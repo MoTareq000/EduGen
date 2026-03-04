@@ -23,10 +23,13 @@ def list_instructor_submissions(instructor_id: int):
             """
             SELECT s.id, s.exam_id, e.topic, s.student_id, u.username, s.student_answers,
                    e.content, e.rubric, s.submitted_at, s.numerical_score, s.ai_feedback,
-                   s.score_breakdown, s.grader_note
+                   s.score_breakdown, s.grader_note,
+                   ps.id, ps.focus_score_final, ps.total_alerts, ps.high_alerts, ps.medium_alerts,
+                   ps.invalidated, ps.invalidate_reason
             FROM submissions s
             JOIN exams e ON s.exam_id = e.id
             JOIN users u ON s.student_id = u.id
+            LEFT JOIN proctor_sessions ps ON ps.submission_id = s.id
             WHERE e.created_by = %s
             ORDER BY s.id DESC
             """,
@@ -48,6 +51,13 @@ def list_instructor_submissions(instructor_id: int):
                 "ai_feedback": r[10],
                 "score_breakdown": json.loads(r[11]) if r[11] else None,
                 "grader_note": r[12],
+                "proctor_session_id": str(r[13]) if r[13] else None,
+                "proctor_focus_score_final": float(r[14]) if r[14] is not None else None,
+                "proctor_total_alerts": r[15],
+                "proctor_high_alerts": r[16],
+                "proctor_medium_alerts": r[17],
+                "proctor_invalidated": r[18],
+                "proctor_invalidate_reason": r[19],
             }
             for r in rows
         ]

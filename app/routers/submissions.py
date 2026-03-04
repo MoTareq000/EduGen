@@ -8,6 +8,7 @@ from app.schemas import GradeRequest, ManualOverrideRequest, SubmitRequest
 from app.services.audit_service import audit_event
 from app.services.common_service import parse_json_blob, parse_score_from_text
 from app.services.grading_service import grade_structured_submission
+from app.services.proctor_service import get_proctor_session
 from app.services.rag_service import get_rag
 
 router = APIRouter(prefix="/submissions", tags=["submissions"])
@@ -33,12 +34,28 @@ def submit_exam(payload: SubmitRequest):
         if cur.fetchone():
             raise HTTPException(status_code=409, detail="Student already submitted this exam")
 
+        if payload.proctor_session_id:
+            session = get_proctor_session(payload.proctor_session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Proctor session not found")
+            if session.get("student_id") != payload.student_id or session.get("exam_id") != payload.exam_id:
+                raise HTTPException(status_code=400, detail="Proctor session does not match this student/exam")
+
         answers_text = payload.answers if isinstance(payload.answers, str) else json.dumps(payload.answers, ensure_ascii=True)
         cur.execute(
             "INSERT INTO submissions (exam_id, student_id, student_answers) VALUES (%s,%s,%s) RETURNING id",
             (payload.exam_id, payload.student_id, answers_text),
         )
         submission_id = cur.fetchone()[0]
+
+        if payload.proctor_session_id:
+            # Keep link update in the same DB transaction as submission insert
+            # to avoid FK visibility issues across separate connections.
+            cur.execute(
+                "UPDATE proctor_sessions SET submission_id=%s WHERE id=%s",
+                (submission_id, payload.proctor_session_id),
+            )
+
         conn.commit()
 
         audit_event(

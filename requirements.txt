@@ -11,7 +11,11 @@ accelerate
 torch
 
 streamlit
+opencv-python>=4.9.0
+mediapipe>=0.10.14
+numpy>=1.26.0
 pandas
+Pillow>=10.3.0
 psycopg2-binary
 groq
 python-dotenv

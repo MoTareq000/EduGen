@@ -45,6 +45,7 @@ class SubmitRequest(BaseModel):
     exam_id: int
     student_id: int
     answers: dict[str, Any] | str
+    proctor_session_id: str | None = None
 
 
 class GradeRequest(BaseModel):
@@ -56,3 +57,24 @@ class ManualOverrideRequest(BaseModel):
     instructor_id: int
     score: int = Field(ge=0, le=100)
     note: str | None = None
+
+
+class ProctorStartRequest(BaseModel):
+    student_id: int
+    exam_id: int
+    duration_min: int = Field(ge=1, le=360)
+    student_name: str = Field(min_length=1, max_length=200)
+    exam_title: str = Field(min_length=1, max_length=300)
+
+
+class ProctorFrameRequest(BaseModel):
+    image_base64: str = Field(min_length=10)
+
+
+class ProctorEndRequest(BaseModel):
+    invalidate_reason: str | None = None
+
+
+class ProctorInvalidateRequest(BaseModel):
+    instructor_id: int
+    reason: str | None = None

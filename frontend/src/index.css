@@ -1,0 +1,238 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 263.4 70% 50.4%;
+    /* Deep Violet */
+    --primary-foreground: 210 20% 98%;
+
+    --secondary: 183.1 100% 35.1%;
+    /* Electric Cyan */
+    --secondary-foreground: 210 20% 98%;
+
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+
+    --accent: 263.4 70% 30.4%;
+    --accent-foreground: 0 0% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 20% 98%;
+
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 263.4 70% 50.4%;
+
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply text-foreground min-h-screen selection:bg-primary/30 selection:text-white;
+    background-color: #030303;
+    background-image:
+      radial-gradient(at 0% 0%, hsla(263, 70%, 20%, 0.15) 0, transparent 50%),
+      radial-gradient(at 50% 0%, hsla(183, 100%, 15%, 0.1) 0, transparent 50%),
+      radial-gradient(at 100% 0%, hsla(263, 70%, 20%, 0.15) 0, transparent 50%);
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+/* Glassmorphism utility */
+.glass {
+  @apply bg-white/5 backdrop-blur-md border border-white/10;
+}
+
+.glass-panel {
+  @apply bg-[#050505]/60 backdrop-blur-2xl border border-white/5;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8);
+}
+
+/* Statistics Page Theme Scope */
+.stats-theme {
+  --card: 0 0% 100%;
+  --ring: 258.3 89.5% 66.3%;
+  --input: 226.5 100% 93.9%;
+  --muted: 250 100% 97.6%;
+  --accent: 214.3 94.6% 92.7%;
+  --border: 226.5 100% 93.9%;
+  --chart-1: 258.3 89.5% 66.3%;
+  --chart-2: 262.1 83.3% 57.8%;
+  --chart-3: 264.4 75.6% 48.2%;
+  --chart-4: 265.4 69.8% 42.2%;
+  --chart-5: 267.1 66.5% 35.5%;
+  --popover: 0 0% 100%;
+  --primary: 258.3 89.5% 66.3%;
+  --sidebar: 250 100% 97.6%;
+  --secondary: 252 100% 97.1%;
+  --background: 0 0% 100%;
+  --foreground: 242.2 47.4% 34.3%;
+  --destructive: 0 84.2% 60.2%;
+  --sidebar-ring: 258.3 89.5% 66.3%;
+  --sidebar-accent: 214.3 94.6% 92.7%;
+  --sidebar-border: 226.5 100% 93.9%;
+  --card-foreground: 242.2 47.4% 34.3%;
+  --sidebar-primary: 258.3 89.5% 66.3%;
+  --muted-foreground: 262.1 83.3% 57.8%;
+  --accent-foreground: 225.9 70.7% 40.2%;
+  --popover-foreground: 242.2 47.4% 34.3%;
+  --primary-foreground: 0 0% 100%;
+  --sidebar-foreground: 242.2 47.4% 34.3%;
+  --secondary-foreground: 244.5 57.9% 50.6%;
+  --destructive-foreground: 0 0% 100%;
+  --sidebar-accent-foreground: 225.9 70.7% 40.2%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --radius: 0.625rem;
+  font-family: Roboto, sans-serif;
+  @apply bg-background text-foreground rounded-2xl p-6;
+  position: relative;
+  isolation: isolate;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(249, 247, 255, 0.96) 100%),
+    radial-gradient(at 100% 0%, hsla(258, 89%, 66%, 0.04) 0, transparent 52%);
+}
+
+.dark .stats-theme {
+  --card: 243.8 47.1% 20%;
+  --ring: 258.3 89.5% 66.3%;
+  --input: 261.2 72.6% 22.9%;
+  --muted: 243.8 47.1% 20%;
+  --accent: 244.5 57.9% 50.6%;
+  --border: 261.2 72.6% 22.9%;
+  --chart-1: 258.3 89.5% 76.3%;
+  --chart-2: 258.3 89.5% 66.3%;
+  --chart-3: 262.1 83.3% 57.8%;
+  --chart-4: 264.4 75.6% 48.2%;
+  --chart-5: 265.4 69.8% 42.2%;
+  --popover: 243.8 47.1% 20%;
+  --primary: 258.3 89.5% 66.3%;
+  --sidebar: 222.2 47.4% 11.2%;
+  --secondary: 243.8 47.1% 20%;
+  --background: 222.2 47.4% 11.2%;
+  --foreground: 226.5 100% 93.9%;
+  --destructive: 0 84.2% 60.2%;
+  --sidebar-ring: 258.3 89.5% 66.3%;
+  --sidebar-accent: 244.5 57.9% 50.6%;
+  --sidebar-border: 261.2 72.6% 22.9%;
+  --card-foreground: 226.5 100% 93.9%;
+  --sidebar-primary: 258.3 89.5% 66.3%;
+  --muted-foreground: 252.5 94.7% 85.1%;
+  --accent-foreground: 226.5 100% 93.9%;
+  --popover-foreground: 226.5 100% 93.9%;
+  --primary-foreground: 0 0% 100%;
+  --sidebar-foreground: 226.5 100% 93.9%;
+  --secondary-foreground: 226.5 100% 93.9%;
+  --destructive-foreground: 0 0% 100%;
+  --sidebar-accent-foreground: 226.5 100% 93.9%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  border: 1px solid rgba(224, 231, 255, 0.1);
+  background-image:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.92) 0%, rgba(14, 18, 36, 0.9) 100%),
+    radial-gradient(at 100% 0%, hsla(258, 89%, 66%, 0.12) 0, transparent 55%);
+}
+
+.stats-theme .glass-panel {
+  background: hsl(var(--card) / 0.93);
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow:
+    0 22px 42px -28px rgba(15, 23, 42, 0.28),
+    0 8px 20px -16px rgba(15, 23, 42, 0.2);
+}
+
+.dark .stats-theme .glass-panel {
+  border-color: rgba(224, 231, 255, 0.12);
+  box-shadow:
+    0 24px 48px -30px rgba(0, 0, 0, 0.5),
+    0 10px 24px -18px rgba(0, 0, 0, 0.35);
+}
+
+.stats-theme .stats-ambient-grid {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.18;
+  background-image:
+    linear-gradient(to right, rgba(124, 58, 237, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(124, 58, 237, 0.08) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: radial-gradient(circle at 50% 20%, black 18%, transparent 72%);
+}
+
+.stats-theme .stats-orb {
+  position: absolute;
+  z-index: -1;
+  border-radius: 9999px;
+  filter: blur(48px);
+  pointer-events: none;
+}
+
+.stats-theme .stats-orb-1 {
+  top: -40px;
+  right: -20px;
+  width: 220px;
+  height: 220px;
+  background: radial-gradient(circle at center, rgba(139, 92, 246, 0.22) 0%, rgba(139, 92, 246, 0) 70%);
+}
+
+.stats-theme .stats-orb-2 {
+  bottom: -80px;
+  left: -30px;
+  width: 240px;
+  height: 240px;
+  background: radial-gradient(circle at center, rgba(59, 130, 246, 0.17) 0%, rgba(59, 130, 246, 0) 70%);
+}
+
+.stats-theme .stats-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  line-height: 1rem;
+  font-weight: 600;
+  border-radius: 9999px;
+  padding: 0.33rem 0.62rem;
+  color: hsl(var(--foreground) / 0.86);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(249, 247, 255, 0.9) 100%);
+}
+
+.dark .stats-theme .stats-pill {
+  border-color: rgba(224, 231, 255, 0.14);
+  background: linear-gradient(180deg, rgba(30, 27, 75, 0.92) 0%, rgba(17, 24, 39, 0.9) 100%);
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
