@@ -1,28 +1,26 @@
-# --- Core Framework & Web ---
-fastapi
-uvicorn
-streamlit
-requests
-python-dotenv
-pydantic
-
-# --- RAG & AI ---
 langchain==0.2.16
 langchain-community==0.2.16
 langchain-core==0.2.38
 langchain-huggingface==0.0.3
-groq
-faiss-cpu
+
 sentence-transformers
-transformers
-torch
-accelerate
-
-# --- Document Processing ---
+faiss-cpu
 pymupdf
-pypdf
+transformers
+accelerate
+torch
 
-# --- Database & Storage ---
-supabase
+streamlit
+opencv-python>=4.9.0
+mediapipe>=0.10.14
+numpy>=1.26.0
 pandas
+Pillow>=10.3.0
 psycopg2-binary
+groq
+python-dotenv
+requests
+fastapi
+uvicorn
+
+python-multipart

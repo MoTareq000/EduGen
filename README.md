@@ -1,111 +1,117 @@
-# 🎓 AI University Portal: RAG-Powered LMS
+# EduGen FastAPI Backend
 
-An intelligent Learning Management System (LMS) that utilizes **Retrieval-Augmented Generation (RAG)** and **Llama 3.3-70B** to automate the creation and grading of academic assessments based on local PDF knowledge bases.
+This project now runs as a FastAPI backend for exam generation, exam delivery, submissions, and grading.
 
----
+## What Changed
 
-## 🌟 Key Features
+- Replaced interactive CLI `main.py` with a FastAPI runner.
+- Refactored backend into a modular `app/` package for team development.
+- `fastapi_backend.py` is now a compatibility shim that re-exports `app.main:app`.
+- Keeps PostgreSQL/Supabase support and RAG-based generation/grading.
 
-- **PDF Knowledge Integration:** Automatically indexes and retrieves context from a library of academic PDFs using **FAISS** and **LangChain**.
-- **AI Exam Generation:** Instructors can generate technical exams (MCQs and Essays) with "Model Answer Keys" tailored to specific course materials.
-- **Auto-Grading Engine:** Uses **Llama 3.3-70B** to compare student submissions against answer keys, providing numerical scores and qualitative feedback.
-- **Performance Analytics:** Interactive dashboards visualizing average scores, topic mastery, and student progress trends.
-- **Role-Based Access Control:** Secure portals for **Instructors** (management/grading) and **Students** (testing/feedback).
+## Project Structure
 
----
+```text
+app/
+  core/        # config/env
+  db/          # db connection + schema bootstrap
+  services/    # oauth, rag, grading, audit, helpers
+  routers/     # endpoint groups (auth/exams/submissions/etc.)
+  schemas.py   # pydantic request models
+  main.py      # FastAPI app assembly
+fastapi_backend.py  # compatibility shim
+main.py             # uvicorn launcher
+```
 
-## 🛠️ Technology Stack
+## Tech Stack
 
-| Component | Technology |
-|------------|----------------|
-| **Frontend** | Streamlit |
-| **LLM Engine** | Llama 3.3-70B (via Groq SDK) |
-| **Vector DB** | FAISS (Facebook AI Similarity Search) |
-| **Embeddings** | HuggingFace (`all-MiniLM-L6-v2`) |
-| **Database** | PostgreSQL 16+ (with JSONB support) |
-| **Data Processing** | Pandas & PyMuPDF |
+- FastAPI + Uvicorn
+- PostgreSQL (`psycopg2-binary`)
+- LangChain + FAISS + HuggingFace embeddings
+- Groq API for exam generation/grading
 
----
+## Environment Variables
 
-## 📊 Data Description (JSON Schema)
+Create `.env` with:
 
-The portal handles data using four primary JSON structures to ensure flexibility and analytical depth:
+```env
+GROQ_API_KEY=...
+GROQ_MODEL=llama-3.3-70b-versatile
 
-### 👤 User Data
+DATABASE_URL=postgresql://...
+# OR use SUPABASE_* values:
+SUPABASE_PROJECT_REF=
+SUPABASE_DB_PASSWORD=
+SUPABASE_DB_USER=postgres
+SUPABASE_DB_NAME=postgres
+SUPABASE_DB_HOST=
+SUPABASE_DB_PORT=5432
 
-Manages student/instructor profiles and course enrollments.
+HOST=0.0.0.0
+PORT=8000
+RELOAD=true
 
-```json
-{
-  "user_id": "USR-12345",
-  "role": "student",
-  "enrolled_courses": ["COURSE-CS101"],
-  "preferences": {
-    "language": "en",
-    "notifications": true
-  }
-}
-📝 Exam Data
-Defines assessed content, including question types and difficulty levels.
+APP_BASE_URL=http://localhost:8000
+OAUTH_STATE_SECRET=replace-with-a-long-random-secret
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+```
 
-{
-  "exam_id": "EXAM-456",
-  "questions": [
-    {
-      "question_id": "Q-001",
-      "type": "multiple_choice",
-      "text": "What is the time complexity of binary search?",
-      "options": ["O(n)", "O(log n)", "O(n^2)", "O(1)"],
-      "correct_answer": "O(log n)"
-    }
-  ]
-}
-🚀 Installation & Setup
-1️⃣ Prerequisites
-Python 3.9+
+## Install
 
-PostgreSQL 16+
-
-Groq API Key
-
-2️⃣ Clone & Install
-git clone https://github.com/your-username/ai-university-portal.git
-cd ai-university-portal
+```bash
 pip install -r requirements.txt
-3️⃣ Database Initialization
-Run the following SQL in your PostgreSQL Query Tool to set up the necessary tables:
+```
 
-CREATE TABLE users (
-    user_id TEXT PRIMARY KEY,
-    email TEXT UNIQUE,
-    role TEXT,
-    preferences JSONB
-);
+## Initialize Database
 
-CREATE TABLE exams (
-    exam_id TEXT PRIMARY KEY,
-    topic TEXT,
-    content JSONB,
-    created_by TEXT REFERENCES users(user_id)
-);
+```bash
+python setup_db.py
+```
 
-CREATE TABLE submissions (
-    grading_id SERIAL PRIMARY KEY,
-    student_id TEXT,
-    exam_id TEXT,
-    total_score INTEGER,
-    scores JSONB
-);
-4️⃣ Run the Portal
-streamlit run app.py
-📂 Project Structure
-├── app.py              # Main Streamlit application and UI logic
-├── rag_pipeline.py     # PDF indexing, retrieval, and AI interaction
-├── pdfs/               # Academic PDF knowledge base
-├── requirements.txt    # Python dependencies
-└── README.md           # Project documentation
-🤝 Contribution
-Contributions, feature requests, and improvements are welcome. Feel free to fork the repository and submit pull requests.
+## Run API
 
-📜 License
-This project is licensed under the MIT License - see the LICENSE file for details.
+```bash
+python main.py
+```
+
+Or directly:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+## API Docs
+
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+- Frontend UI: `http://localhost:8000/`
+
+## OAuth Redirect URLs
+
+- Google callback: `http://localhost:8000/auth/oauth/google/callback`
+- GitHub callback: `http://localhost:8000/auth/oauth/github/callback`
+
+## Core Endpoints
+
+- `GET /health`
+- `POST /auth/register`
+- `POST /auth/login`
+- `POST /rag/generate`
+- `GET /rag/pdfs`
+- `POST /rag/pdfs/upload` (instructor-only)
+- `POST /exams`
+- `GET /exams`
+- `GET /exams/{exam_id}`
+- `POST /submissions`
+- `POST /submissions/grade`
+- `GET /submissions/by-exam?exam_id=...&student_id=...`
+- `GET /submissions/students/{student_id}`
+
+## Notes
+
+- The API starts even if DB startup checks fail, and exposes startup issues in `/health`.
+- RAG initialization is lazy; it loads only when generation/grading endpoints are called.
+- Instructors can upload PDFs from the frontend under `Generate Exam` to update the knowledge base.
