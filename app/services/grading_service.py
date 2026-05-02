@@ -1,4 +1,4 @@
-from typing import Any
+﻿from typing import Any
 
 from app.services.common_service import parse_score_from_text
 

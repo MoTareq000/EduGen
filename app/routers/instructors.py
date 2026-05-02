@@ -66,6 +66,64 @@ def list_instructor_submissions(instructor_id: int):
         conn.close()
 
 
+@router.get("/{instructor_id}/submissions/{submission_id}")
+def get_instructor_submission_detail(instructor_id: int, submission_id: int):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT role FROM users WHERE id=%s", (instructor_id,))
+        instructor = cur.fetchone()
+        if not instructor:
+            raise HTTPException(status_code=404, detail="Instructor not found")
+        if instructor[0] != "instructor":
+            raise HTTPException(status_code=403, detail="User is not an instructor")
+
+        cur.execute(
+            """
+            SELECT s.id, s.exam_id, e.topic, s.student_id, u.username, s.student_answers,
+                   e.content, e.rubric, s.submitted_at, s.numerical_score, s.ai_feedback,
+                   s.score_breakdown, s.grader_note,
+                   ps.id, ps.focus_score_final, ps.total_alerts, ps.high_alerts, ps.medium_alerts,
+                   ps.invalidated, ps.invalidate_reason
+            FROM submissions s
+            JOIN exams e ON s.exam_id = e.id
+            JOIN users u ON s.student_id = u.id
+            LEFT JOIN proctor_sessions ps ON ps.submission_id = s.id
+            WHERE e.created_by = %s AND s.id = %s
+            """,
+            (instructor_id, submission_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Submission not found")
+
+        return {
+            "submission_id": row[0],
+            "exam_id": row[1],
+            "exam_topic": row[2],
+            "student_id": row[3],
+            "student_username": row[4],
+            "student_answers": row[5],
+            "exam_content": row[6],
+            "rubric": row[7],
+            "submitted_at": row[8],
+            "numerical_score": row[9],
+            "ai_feedback": row[10],
+            "score_breakdown": json.loads(row[11]) if row[11] else None,
+            "grader_note": row[12],
+            "proctor_session_id": str(row[13]) if row[13] else None,
+            "proctor_focus_score_final": float(row[14]) if row[14] is not None else None,
+            "proctor_total_alerts": row[15],
+            "proctor_high_alerts": row[16],
+            "proctor_medium_alerts": row[17],
+            "proctor_invalidated": row[18],
+            "proctor_invalidate_reason": row[19],
+        }
+    finally:
+        cur.close()
+        conn.close()
+
+
 @router.get("/{instructor_id}/analytics")
 def instructor_analytics(instructor_id: int):
     conn = get_db_connection()

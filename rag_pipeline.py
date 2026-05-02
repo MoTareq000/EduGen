@@ -1,18 +1,18 @@
 import json
 import os
 import re
-from groq import Groq
-from dotenv import load_dotenv
+from collections import Counter
+from pathlib import Path
 
-from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
+from dotenv import load_dotenv
+from groq import Groq
+from langchain_core.documents import Document
 
 # =========================
 # CONFIGURATION
 # =========================
-load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parent
+load_dotenv(PROJECT_ROOT / ".env")
 CURRENT_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
@@ -25,52 +25,173 @@ class RAGPipeline:
         print("Initializing Knowledge Base...")
         self.pdf_folder = pdf_folder
         self.faiss_index_path = "faiss_index"
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
+        self.embeddings = None
+        self.embeddings_error = None
+        self.faiss_cls = None
+        self.faiss_error = None
         self.db = None
+        self.chunk_store = []
 
         if not os.path.exists(self.pdf_folder):
             os.makedirs(self.pdf_folder)
 
-        # Try to load an existing FAISS index, but do NOT hard-fail if missing or corrupt.
+        self.embeddings = self._load_embeddings()
+        if self.embeddings is None:
+            self.chunk_store = self._load_all_pdf_chunks()
+            if not self.chunk_store:
+                print("Warning: no PDF content found in 'pdfs' folder; RAG will run without retrieval.")
+            return
+
+        self.faiss_cls = self._load_faiss_class()
+        if self.faiss_cls is None:
+            self.chunk_store = self._load_all_pdf_chunks()
+            if not self.chunk_store:
+                print("Warning: no PDF content found in 'pdfs' folder; RAG will run without retrieval.")
+            return
+
         if os.path.exists(self.faiss_index_path):
             try:
-                self.db = FAISS.load_local(
+                self.db = self.faiss_cls.load_local(
                     self.faiss_index_path,
                     self.embeddings,
                     allow_dangerous_deserialization=True,
                 )
             except Exception as exc:
-                # Fall back to lazy / retrieval‑free mode; grading does not require the index.
                 print(f"Warning: failed to load FAISS index from '{self.faiss_index_path}': {exc}")
-                self.db = None
+                self._rebuild_or_fallback_chunks()
         else:
-            # Build an index from any PDFs we find, but don't crash if there are none.
-            docs = []
-            for file in os.listdir(self.pdf_folder):
-                if file.lower().endswith(".pdf"):
-                    try:
-                        loader = PyPDFLoader(os.path.join(self.pdf_folder, file))
-                        docs.extend(loader.load())
-                    except Exception as exc:
-                        print(f"Warning: failed to load PDF '{file}': {exc}")
-                        continue
+            self._rebuild_or_fallback_chunks()
 
-            if docs:
-                splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
-                chunks = splitter.split_documents(docs)
-                if chunks:
-                    self.db = FAISS.from_documents(chunks, self.embeddings)
-                    self.db.save_local(self.faiss_index_path)
-                else:
-                    # No usable chunks; continue without a vector index.
-                    print("Warning: no usable chunks built from PDFs; continuing without FAISS index.")
-                    self.db = None
-            else:
-                # No PDFs available; allow the pipeline to operate in pure LLM mode.
-                print("Warning: no PDF content found in 'pdfs' folder; RAG will run without retrieval.")
-                self.db = None
+    def _load_embeddings(self):
+        try:
+            from langchain_huggingface import HuggingFaceEmbeddings
+
+            return HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2"
+            )
+        except Exception as exc:
+            # Windows torch installs can fail to load fbgemm.dll. Keep RAG alive
+            # by falling back to lexical retrieval over PDF chunks.
+            self.embeddings_error = str(exc)
+            print(
+                "Warning: embeddings backend unavailable; using lexical PDF retrieval fallback: "
+                f"{exc}"
+            )
+            return None
+
+    def _load_faiss_class(self):
+        try:
+            from langchain_community.vectorstores import FAISS
+
+            return FAISS
+        except Exception as exc:
+            self.faiss_error = str(exc)
+            print(
+                "Warning: FAISS backend unavailable; using lexical PDF retrieval fallback: "
+                f"{exc}"
+            )
+            return None
+
+    def _split_documents(self, docs, chunk_size: int = 1000, chunk_overlap: int = 150):
+        chunks = []
+        step = max(chunk_size - chunk_overlap, 1)
+
+        for doc in docs:
+            content = (getattr(doc, "page_content", "") or "").strip()
+            if not content:
+                continue
+
+            metadata = dict(getattr(doc, "metadata", {}) or {})
+            if len(content) <= chunk_size:
+                chunks.append(Document(page_content=content, metadata=metadata))
+                continue
+
+            start = 0
+            while start < len(content):
+                end = min(len(content), start + chunk_size)
+                piece = content[start:end].strip()
+                if piece:
+                    chunks.append(Document(page_content=piece, metadata=dict(metadata)))
+                if end >= len(content):
+                    break
+                start += step
+
+        return chunks
+
+    def _rebuild_or_fallback_chunks(self):
+        chunks = self._load_all_pdf_chunks()
+        if not chunks:
+            print("Warning: no PDF content found in 'pdfs' folder; RAG will run without retrieval.")
+            self.db = None
+            self.chunk_store = []
+            return
+
+        if self.faiss_cls is None or self.embeddings is None:
+            self.db = None
+            self.chunk_store = chunks
+            return
+
+        try:
+            self.db = self.faiss_cls.from_documents(chunks, self.embeddings)
+            self.db.save_local(self.faiss_index_path)
+            self.chunk_store = []
+        except Exception as exc:
+            print(
+                "Warning: failed to build FAISS index; using lexical PDF retrieval fallback: "
+                f"{exc}"
+            )
+            self.db = None
+            self.chunk_store = chunks
+
+    def _load_all_pdf_chunks(self):
+        docs = []
+        for file in os.listdir(self.pdf_folder):
+            if file.lower().endswith(".pdf"):
+                try:
+                    docs.extend(self._load_pdf_docs(os.path.join(self.pdf_folder, file)))
+                except Exception as exc:
+                    print(f"Warning: failed to load PDF '{file}': {exc}")
+                    continue
+
+        if not docs:
+            return []
+
+        return self._split_documents(docs)
+
+    @staticmethod
+    def _tokenize(text: str):
+        return re.findall(r"[a-z0-9]+", (text or "").lower())
+
+    def _lexical_similarity_search(self, query: str, k: int = 5):
+        if not self.chunk_store:
+            return []
+
+        query_text = (query or "").lower()
+        query_tokens = self._tokenize(query_text)
+        query_counts = Counter(query_tokens)
+        scored = []
+
+        for idx, doc in enumerate(self.chunk_store):
+            content = getattr(doc, "page_content", "") or ""
+            content_text = content.lower()
+            content_tokens = self._tokenize(content_text)
+            if not content_tokens:
+                continue
+
+            content_counts = Counter(content_tokens)
+            overlap = sum(min(content_counts[token], freq) for token, freq in query_counts.items())
+            unique_overlap = len(set(query_tokens) & set(content_tokens))
+            phrase_bonus = 3 if query_text and query_text in content_text else 0
+            score = overlap + (0.6 * unique_overlap) + phrase_bonus
+            scored.append((score, idx, doc))
+
+        if not scored:
+            return []
+
+        scored.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+        if scored[0][0] <= 0:
+            return [doc for _, _, doc in scored[:k]]
+        return [doc for score, _, doc in scored[:k] if score > 0]
 
     def add_uploaded_pdfs(self, uploaded_files):
         if not uploaded_files:
@@ -107,19 +228,40 @@ class RAGPipeline:
                 continue
 
             try:
-                loader = PyPDFLoader(dest_path)
-                loaded_docs.extend(loader.load())
+                loaded_docs.extend(self._load_pdf_docs(dest_path))
                 added_files.append(filename)
             except Exception as parse_error:
                 failed_files.append({"name": filename, "error": str(parse_error)})
                 continue
 
         if loaded_docs:
-            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
-            chunks = splitter.split_documents(loaded_docs)
+            chunks = self._split_documents(loaded_docs)
             if chunks:
-                self.db.add_documents(chunks)
-                self.db.save_local(self.faiss_index_path)
+                if self.embeddings is None or self.faiss_cls is None:
+                    self.chunk_store.extend(chunks)
+                elif self.db is None:
+                    try:
+                        self.db = self.faiss_cls.from_documents(chunks, self.embeddings)
+                    except Exception as exc:
+                        print(
+                            "Warning: failed to create FAISS index; using lexical PDF retrieval fallback: "
+                            f"{exc}"
+                        )
+                        self.db = None
+                        self.chunk_store.extend(chunks)
+                else:
+                    try:
+                        self.db.add_documents(chunks)
+                    except Exception as exc:
+                        print(
+                            "Warning: failed to append documents to FAISS index; using lexical PDF retrieval fallback: "
+                            f"{exc}"
+                        )
+                        self.db = None
+                        self.chunk_store.extend(chunks)
+
+                if self.db is not None:
+                    self.db.save_local(self.faiss_index_path)
 
         return {"added": added_files, "skipped": skipped_files, "failed": failed_files}
 
@@ -148,6 +290,48 @@ class RAGPipeline:
                     continue
 
         raise ValueError("Could not parse JSON payload")
+
+    @staticmethod
+    def _load_pdf_docs(path: str):
+        pypdf_error = None
+        try:
+            from pypdf import PdfReader
+
+            reader = PdfReader(path)
+            docs = []
+            for index, page in enumerate(reader.pages, start=1):
+                text = (page.extract_text() or "").strip()
+                if text:
+                    docs.append(
+                        Document(
+                            page_content=text,
+                            metadata={"source": path, "page": index},
+                        )
+                    )
+            return docs
+        except Exception as exc:
+            pypdf_error = exc
+
+        try:
+            import fitz
+
+            docs = []
+            with fitz.open(path) as pdf_doc:
+                for index, page in enumerate(pdf_doc, start=1):
+                    text = (page.get_text("text") or "").strip()
+                    if text:
+                        docs.append(
+                            Document(
+                                page_content=text,
+                                metadata={"source": path, "page": index},
+                            )
+                        )
+            return docs
+        except Exception as fallback_exc:
+            raise ValueError(
+                f"PDF parsing failed for '{os.path.basename(path)}'. "
+                f"pypdf error: {pypdf_error}. PyMuPDF error: {fallback_exc}"
+            ) from fallback_exc
 
     @staticmethod
     def _normalize_exam_payload(payload, topic, difficulty):
@@ -211,16 +395,35 @@ class RAGPipeline:
         essay_count=2,
         difficulty="Beginner",
         mode="General",
+        pdf_name: str | None = None,
     ):
-        # If no vector index is available, fall back to LLM‑only mode with empty context.
-        if self.db is not None:
-            docs = self.db.similarity_search(topic, k=5)
-            context_text = "\\n\\n".join([d.page_content for d in docs])
-            sources = {os.path.basename(d.metadata.get("source", "Unknown")) for d in docs}
+        if pdf_name:
+            pdf_path = os.path.join(self.pdf_folder, pdf_name)
+            if not os.path.isfile(pdf_path):
+                raise FileNotFoundError(f"PDF not found: {pdf_name}")
+            try:
+                docs = self._load_pdf_docs(pdf_path)
+            except Exception as exc:
+                raise ValueError(f"Failed to read PDF '{pdf_name}': {exc}")
+            if docs:
+                chunks = self._split_documents(docs)
+                context_text = "\n\n".join([d.page_content for d in chunks])
+            else:
+                context_text = ""
+            sources = {pdf_name}
         else:
-            docs = []
-            context_text = ""
-            sources = set()
+            if self.db is not None:
+                docs = self.db.similarity_search(topic, k=5)
+                context_text = "\n\n".join([d.page_content for d in docs])
+                sources = {os.path.basename(d.metadata.get("source", "Unknown")) for d in docs}
+            elif self.chunk_store:
+                docs = self._lexical_similarity_search(topic, k=5)
+                context_text = "\n\n".join([d.page_content for d in docs])
+                sources = {os.path.basename(d.metadata.get("source", "Unknown")) for d in docs}
+            else:
+                docs = []
+                context_text = ""
+                sources = set()
 
         if mode == "Instructor Mode":
             system_msg = "You generate university exams in strict JSON only."

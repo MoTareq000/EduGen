@@ -23,6 +23,23 @@ class GenerateExamRequest(BaseModel):
     essay_count: int = Field(default=2, ge=0, le=10)
 
 
+class GenerateExamFromPdfRequest(BaseModel):
+    pdf_name: str
+    topic: str | None = None
+    difficulty: str = "Beginner"
+    mcq_count: int = Field(default=3, ge=1, le=20)
+    essay_count: int = Field(default=2, ge=0, le=10)
+
+
+class PracticeExamRequest(BaseModel):
+    instructor_id: int
+    topic: str = "Practice Exam"
+    difficulty: str = "Beginner"
+    mcq_count: int = Field(default=3, ge=1, le=20)
+    essay_count: int = Field(default=1, ge=0, le=10)
+    status: Literal["draft", "published"] = "published"
+
+
 class CreateExamRequest(BaseModel):
     instructor_id: int
     topic: str

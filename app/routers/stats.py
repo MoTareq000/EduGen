@@ -8,12 +8,56 @@ from app.db.connection import get_db_connection
 router = APIRouter(prefix="/instructors", tags=["instructors"])
 STUDENT_SUBJECTS = ["math", "physics", "chemistry", "biology", "programming", "english"]
 
+def _fetch_students_via_supabase():
+    response = supabase.table("students").select("*").execute()
+    err = getattr(response, "error", None)
+    if err:
+        # supabase-py can return error objects instead of raising
+        raise RuntimeError(getattr(err, "message", None) or str(err))
+    return response.data or []
+
+def _fetch_students_via_db():
+    # Fallback when Supabase REST is unreachable; uses direct DB connection.
+    from psycopg2.extras import RealDictCursor
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                    student_id,
+                    first_name,
+                    grade_level,
+                    math,
+                    physics,
+                    chemistry,
+                    biology,
+                    programming,
+                    english,
+                    total_percent
+                FROM students
+                """
+            )
+            return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
 @router.get("/instructor/students/analytics")
 def get_students_analytics():
     """Aggregated stats for the Students management page: averages, min, max per subject, top/bottom by total_percent."""
     try:
-        response = supabase.table("students").select("*").execute()
-        rows = response.data or []
+        # Try Supabase REST first, fallback to direct DB if it fails.
+        try:
+            rows = _fetch_students_via_supabase()
+        except Exception as supa_err:
+            try:
+                rows = _fetch_students_via_db()
+            except Exception as db_err:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Analytics fetch failed. Supabase error: {supa_err}. DB error: {db_err}",
+                )
         if not rows:
             return {
                 "total_students": 0,

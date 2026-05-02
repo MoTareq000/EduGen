@@ -5,11 +5,49 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 
 from app.db.connection import get_db_connection
-from app.schemas import CreateExamRequest, UpdateExamRequest
+from app.schemas import CreateExamRequest, UpdateExamRequest, PracticeExamRequest
 from app.services.audit_service import audit_event
 from app.services.common_service import parse_json_blob
 
 router = APIRouter(prefix="/exams", tags=["exams"])
+
+
+def _build_practice_exam_content(topic: str, difficulty: str, mcq_count: int, essay_count: int) -> str:
+    mcqs = []
+    for i in range(mcq_count):
+        mcqs.append(
+            {
+                "id": f"MCQ-{i + 1}",
+                "question": f"[Practice] {topic} MCQ {i + 1}",
+                "options": [
+                    "Option A",
+                    "Option B",
+                    "Option C",
+                    "Option D",
+                ],
+                "correct_option_index": 0,
+                "explanation": "Practice question for testing submissions.",
+            }
+        )
+
+    essays = []
+    for i in range(essay_count):
+        essays.append(
+            {
+                "id": f"ESSAY-{i + 1}",
+                "question": f"[Practice] Explain a key idea in {topic} (Q{i + 1}).",
+                "model_answer": "This is a sample answer used for testing grading.",
+            }
+        )
+
+    payload = {
+        "topic": topic,
+        "difficulty": difficulty,
+        "allow_resubmit": True,
+        "mcqs": mcqs,
+        "essays": essays,
+    }
+    return json.dumps(payload, ensure_ascii=True)
 
 
 @router.post("")
@@ -62,6 +100,69 @@ def create_exam(payload: CreateExamRequest):
         )
         conn.commit()
         audit_event(payload.instructor_id, "exam_created", {"exam_id": exam_id, "status": payload.status})
+        return {"id": exam_id, "version": version}
+    finally:
+        cur.close()
+        conn.close()
+
+
+@router.post("/practice")
+def create_practice_exam(payload: PracticeExamRequest):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT role FROM users WHERE id=%s", (payload.instructor_id,))
+        user_row = cur.fetchone()
+        if not user_row:
+            raise HTTPException(status_code=404, detail="Instructor not found")
+        if user_row[0] != "instructor":
+            raise HTTPException(status_code=403, detail="User is not an instructor")
+
+        content = _build_practice_exam_content(
+            payload.topic,
+            payload.difficulty,
+            payload.mcq_count,
+            payload.essay_count,
+        )
+
+        cur.execute(
+            """
+            INSERT INTO exams (topic, content, difficulty, created_by, status, due_at, published_at, rubric, source_refs, version)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING id, version
+            """,
+            (
+                payload.topic,
+                content,
+                payload.difficulty,
+                payload.instructor_id,
+                payload.status,
+                None,
+                datetime.utcnow() if payload.status == "published" else None,
+                None,
+                json.dumps([], ensure_ascii=True),
+                1,
+            ),
+        )
+        exam_id, version = cur.fetchone()
+
+        cur.execute(
+            """
+            INSERT INTO exam_versions (exam_id, version, content, rubric, status, due_at, changed_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
+            """,
+            (
+                exam_id,
+                version,
+                content,
+                None,
+                payload.status,
+                None,
+                payload.instructor_id,
+            ),
+        )
+        conn.commit()
+        audit_event(payload.instructor_id, "exam_created_practice", {"exam_id": exam_id, "status": payload.status})
         return {"id": exam_id, "version": version}
     finally:
         cur.close()
@@ -129,7 +230,7 @@ def list_exams(
             clauses.append("created_by=%s")
             args.append(created_by)
 
-        sql = "SELECT id, topic, difficulty, status, due_at, created_by, version, rubric FROM exams"
+        sql = "SELECT id, topic, difficulty, status, due_at, created_by, version, rubric, content FROM exams"
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY id DESC"
@@ -146,6 +247,18 @@ def list_exams(
                 "created_by": r[5],
                 "version": r[6],
                 "rubric": r[7],
+                "allow_resubmit": bool(
+                    (
+                        lambda data: (
+                            isinstance(data, dict)
+                            and (
+                                data.get("allow_resubmit")
+                                or data.get("allow_multiple_submissions")
+                                or data.get("practice_mode")
+                            )
+                        )
+                    )(parse_json_blob(r[8]))
+                ),
             }
             for r in rows
         ]

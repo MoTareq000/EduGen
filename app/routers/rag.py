@@ -1,8 +1,9 @@
 from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from app.schemas import GenerateExamRequest
+from app.schemas import GenerateExamRequest, GenerateExamFromPdfRequest
 from app.db.connection import get_db_connection
 from app.services.audit_service import audit_event
 from app.services.rag_service import get_rag, list_pdf_files
@@ -46,6 +47,34 @@ def generate_exam(payload: GenerateExamRequest):
         essay_count=payload.essay_count,
         difficulty=payload.difficulty,
         mode="Instructor Mode",
+    )
+    if isinstance(text, str) and text.startswith("Error calling AI:"):
+        raise HTTPException(status_code=502, detail=text)
+    return {"content": text, "sources": sorted(list(sources))}
+
+
+@router.post("/generate-from-pdf")
+def generate_exam_from_pdf(payload: GenerateExamFromPdfRequest):
+    rag = get_rag()
+    pdf_dir = Path("pdfs")
+    pdf_name = (payload.pdf_name or "").strip()
+    if not pdf_name:
+        raise HTTPException(status_code=400, detail="pdf_name is required")
+    if "/" in pdf_name or "\\" in pdf_name:
+        raise HTTPException(status_code=400, detail="Invalid pdf_name")
+
+    pdf_path = pdf_dir / pdf_name
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail=f"PDF not found: {pdf_name}")
+
+    topic = (payload.topic or "").strip() or pdf_path.stem
+    text, sources = rag.query(
+        topic,
+        mcq_count=payload.mcq_count,
+        essay_count=payload.essay_count,
+        difficulty=payload.difficulty,
+        mode="Instructor Mode",
+        pdf_name=pdf_name,
     )
     if isinstance(text, str) and text.startswith("Error calling AI:"):
         raise HTTPException(status_code=502, detail=text)

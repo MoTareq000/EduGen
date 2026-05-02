@@ -1,6 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
-
 from app.schemas import LoginRequest, RegisterRequest
 from app.db.connection import get_db_connection
 from app.services.audit_service import audit_event
