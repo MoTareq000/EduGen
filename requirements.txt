@@ -6,6 +6,7 @@ langchain-huggingface==0.0.3
 sentence-transformers
 faiss-cpu
 pymupdf
+pypdf
 transformers
 accelerate
 torch

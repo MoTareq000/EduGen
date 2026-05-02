@@ -1,4 +1,4 @@
-import json
+﻿import json
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
@@ -8,10 +8,41 @@ from app.schemas import GradeRequest, ManualOverrideRequest, SubmitRequest
 from app.services.audit_service import audit_event
 from app.services.common_service import parse_json_blob, parse_score_from_text
 from app.services.grading_service import grade_structured_submission
+from app.services.edugen_adapter import build_edugen_answers, build_edugen_questions
+from app.routers.EduGen_Project.edugen.models.exam_grader import grade_answers
 from app.services.proctor_service import get_proctor_session
 from app.services.rag_service import get_rag
 
 router = APIRouter(prefix="/submissions", tags=["submissions"])
+
+_EXAMS_HAS_QUESTIONS: bool | None = None
+
+
+def _exams_has_questions_column(cur) -> bool:
+    global _EXAMS_HAS_QUESTIONS
+    if _EXAMS_HAS_QUESTIONS is not None:
+        return _EXAMS_HAS_QUESTIONS
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'exams'
+          AND column_name = 'questions'
+        """
+    )
+    _EXAMS_HAS_QUESTIONS = cur.fetchone() is not None
+    return _EXAMS_HAS_QUESTIONS
+
+
+def _is_truthy(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "y"}
+    return False
 
 
 @router.post("")
@@ -19,20 +50,28 @@ def submit_exam(payload: SubmitRequest):
     conn = get_db_connection()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT due_at, status FROM exams WHERE id=%s", (payload.exam_id,))
+        cur.execute("SELECT due_at, status, content FROM exams WHERE id=%s", (payload.exam_id,))
         exam_row = cur.fetchone()
         if not exam_row:
             raise HTTPException(status_code=404, detail="Exam not found")
 
-        due_at, status = exam_row
+        due_at, status, exam_content = exam_row
         if status != "published":
             raise HTTPException(status_code=400, detail="Exam is not published")
         if due_at and due_at <= datetime.utcnow():
             raise HTTPException(status_code=400, detail="Exam is closed")
 
-        cur.execute("SELECT id FROM submissions WHERE exam_id=%s AND student_id=%s", (payload.exam_id, payload.student_id))
-        if cur.fetchone():
-            raise HTTPException(status_code=409, detail="Student already submitted this exam")
+        exam_data = parse_json_blob(exam_content)
+        allow_resubmit = False
+        if isinstance(exam_data, dict):
+            allow_resubmit = _is_truthy(exam_data.get("allow_resubmit")) or _is_truthy(
+                exam_data.get("allow_multiple_submissions")
+            ) or _is_truthy(exam_data.get("practice_mode"))
+
+        if not allow_resubmit:
+            cur.execute("SELECT id FROM submissions WHERE exam_id=%s AND student_id=%s", (payload.exam_id, payload.student_id))
+            if cur.fetchone():
+                raise HTTPException(status_code=409, detail="Student already submitted this exam")
 
         if payload.proctor_session_id:
             session = get_proctor_session(payload.proctor_session_id)
@@ -79,37 +118,58 @@ def grade_submission(payload: GradeRequest):
         if not instructor or instructor[0] != "instructor":
             raise HTTPException(status_code=403, detail="Only instructors can grade")
 
-        cur.execute(
-            """
-            SELECT s.id, s.student_answers, e.content, e.rubric, e.created_by, s.exam_id
-            FROM submissions s JOIN exams e ON s.exam_id = e.id
-            WHERE s.id = %s
-            """,
-            (payload.submission_id,),
-        )
+        if _exams_has_questions_column(cur):
+            cur.execute(
+                """
+                SELECT s.id, s.student_answers, e.content, e.rubric, e.created_by, s.exam_id, e.questions
+                FROM submissions s JOIN exams e ON s.exam_id = e.id
+                WHERE s.id = %s
+                """,
+                (payload.submission_id,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT s.id, s.student_answers, e.content, e.rubric, e.created_by, s.exam_id
+                FROM submissions s JOIN exams e ON s.exam_id = e.id
+                WHERE s.id = %s
+                """,
+                (payload.submission_id,),
+            )
         row = cur.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Submission not found")
-
-        submission_id, student_answers, exam_content, rubric, exam_owner, exam_id = row
+        if len(row) == 7:
+            submission_id, student_answers, exam_content, rubric, exam_owner, exam_id, exam_questions = row
+        else:
+            submission_id, student_answers, exam_content, rubric, exam_owner, exam_id = row
+            exam_questions = None
         if exam_owner != payload.instructor_id:
             raise HTTPException(status_code=403, detail="Cannot grade submissions for another instructor")
 
-        rag = get_rag()
-        prompt_exam = f"RUBRIC:\n{rubric}\n\n{exam_content}" if rubric else exam_content
-        ai_feedback = rag.grade_submission(prompt_exam, student_answers)
-        if isinstance(ai_feedback, str) and ai_feedback.startswith("Grading Error:"):
-            raise HTTPException(status_code=502, detail=ai_feedback)
-
-        exam_data = parse_json_blob(exam_content)
-        student_data = parse_json_blob(student_answers)
-        if exam_data and student_data:
-            grading = grade_structured_submission(exam_data, student_data, ai_feedback)
-            score = int(grading["final_score"])
-            score_breakdown = json.dumps(grading, ensure_ascii=True)
+        edugen_questions = build_edugen_questions(exam_content, exam_questions)
+        if edugen_questions:
+            edugen_answers = build_edugen_answers(student_answers, edugen_questions)
+            grading = grade_answers(edugen_questions, edugen_answers)
+            score = int(grading["numerical_score"])
+            ai_feedback = grading["ai_feedback"]
+            score_breakdown = json.dumps(grading["score_breakdown"], ensure_ascii=True)
         else:
-            score = parse_score_from_text(ai_feedback)
-            score_breakdown = json.dumps({"legacy_mode": True, "parsed_score": score}, ensure_ascii=True)
+            rag = get_rag()
+            prompt_exam = f"RUBRIC:\n{rubric}\n\n{exam_content}" if rubric else exam_content
+            ai_feedback = rag.grade_submission(prompt_exam, student_answers)
+            if isinstance(ai_feedback, str) and ai_feedback.startswith("Grading Error:"):
+                raise HTTPException(status_code=502, detail=ai_feedback)
+
+            exam_data = parse_json_blob(exam_content)
+            student_data = parse_json_blob(student_answers)
+            if exam_data and student_data:
+                grading_structured = grade_structured_submission(exam_data, student_data, ai_feedback)
+                score = int(grading_structured["final_score"])
+                score_breakdown = json.dumps(grading_structured, ensure_ascii=True)
+            else:
+                score = parse_score_from_text(ai_feedback)
+                score_breakdown = json.dumps({"legacy_mode": True, "parsed_score": score}, ensure_ascii=True)
 
         cur.execute(
             """

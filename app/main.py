@@ -5,6 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from app.core.config import FRONTEND_DIR, get_config_value
 from app.db.schema import ensure_runtime_schema
 from app.routers import audit, auth, exams, frontend, health, instructors, proctor, rag, stats, submissions, text_to_sql
+from app.routers.EduGen_Project.edugen.api import app as edugen_app
 
 app = FastAPI(title="Road Project Backend", version="2.0.0")
 app.state.startup_errors = []
@@ -15,6 +16,7 @@ allow_origins = [origin.strip() for origin in cors_origins_raw.split(",") if ori
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -44,3 +46,6 @@ app.include_router(audit.router)
 app.include_router(text_to_sql.router)
 app.include_router(stats.router)
 app.include_router(proctor.router)
+
+# Mount teammate EduGen API under /edugen
+app.mount("/edugen", edugen_app)

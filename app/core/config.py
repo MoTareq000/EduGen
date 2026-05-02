@@ -3,10 +3,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-load_dotenv()
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
+load_dotenv(PROJECT_ROOT / ".env")
 
 
 def get_config_value(key: str, default: str = "") -> str:
